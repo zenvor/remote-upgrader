@@ -1,0 +1,27 @@
+{
+  "name": "device-agent",
+  "version": "1.0.0",
+  "description": "远程升级系统设备端代理",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node src/app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "remote-upgrade",
+    "device-agent"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "axios": "^1.11.0",
+    "fs-extra": "^11.3.1",
+    "js-yaml": "^4.1.0",
+    "node-machine-id": "^1.1.12",
+    "socket.io-client": "^4.8.1",
+    "systeminformation": "^5.27.8"
+  }
+}

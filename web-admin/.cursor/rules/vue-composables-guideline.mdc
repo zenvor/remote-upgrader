@@ -1,0 +1,9 @@
+---
+description: Vue Composables 使用简明规则
+alwaysApply: false
+---
+- 仅在以下两种场景下使用 Composables：
+  - 需要在多个组件中复用状态化逻辑（如 ref、computed）
+  - 当前组件逻辑复杂、结构混乱，需要功能性拆分
+- 不应将简单、仅限当前组件的逻辑提取为 Composables，避免过度设计
+- Composables 是为“逻辑复用”或“组件简化”而设计，应避免滥用

@@ -1,0 +1,20 @@
+--- 
+description: 为工具函数添加标准 JSDoc 注释
+globs: *.js
+alwaysApply: false
+---
+- 所有导出的函数必须使用 JSDoc 风格的注释（/** ... */）
+- 注释应包含函数用途、参数类型、返回值说明
+- 注释应简洁明确，避免无意义的模板内容
+- 该规则适用于工具函数、服务函数、通用逻辑模块，不用于组件内部
+
+@example
+/**
+ * 计算两个数之和
+ * @param {number} a - 第一个数
+ * @param {number} b - 第二个数
+ * @returns {number} 两数之和
+ */
+function sum(a, b) {
+  return a + b;
+}

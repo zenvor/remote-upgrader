@@ -1,0 +1,13 @@
+---
+description: 表单数据管理最佳实践 - 工厂函数模式
+globs: *.vue
+alwaysApply: false
+---
+- 使用 `getInitialXxxFormState()` 工厂函数返回表单初始状态，仅包含业务字段，排除系统字段（如 `id`、`created_at` 等）
+- 使用 `formState.value = getInitialXxxFormState()` 进行完全重置，确保清除所有字段，包括后端返回的额外字段
+- 使用 `ref(getInitialXxxFormState())` 创建响应式表单数据，确保初始化语义明确
+- 使用 `Object.assign(formState.value, record)` 合并编辑数据至表单中
+- 使用 `defineModel('formData')` 实现子组件双向绑定，父组件通过 `v-model:form-data` 传递数据
+- 保持数据职责清晰：父组件管理表单状态和逻辑，子组件专注交互与验证
+
+优势：清晰语义、避免数据污染、业务字段与系统字段解耦、提升新增流程的安全性和可控性

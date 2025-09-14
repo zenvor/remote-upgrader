@@ -1,0 +1,68 @@
+{
+  "devices": {
+    "device-example-12345": {
+      "deviceInfo": {
+        "deviceId": "device-example-12345",
+        "deviceName": "Example-Device",
+        "version": "1.0.0",
+        "deployPath": "/example/deploy/path",
+        "system": {
+          "platform": "linux",
+          "osVersion": "Ubuntu 20.04",
+          "arch": "x64"
+        },
+        "agent": {
+          "agentVersion": "1.0.0"
+        },
+        "network": {
+          "wifiName": "Example-WiFi",
+          "wifiSignal": null,
+          "publicIp": "192.168.1.100",
+          "lastKnownIp": "192.168.1.100",
+          "localIp": "192.168.1.100",
+          "macAddresses": [
+            "00:11:22:33:44:55"
+          ]
+        },
+        "timestamp": "2025-01-01T00:00:00.000Z",
+        "status": "offline",
+        "storage": {
+          "diskFreeBytes": 10737418240,
+          "writable": true
+        },
+        "health": {
+          "uptimeSeconds": 3600
+        },
+        "deploy": {
+          "rollbackAvailable": false
+        }
+      },
+      "connectionHistory": [],
+      "upgradeHistory": [],
+      "status": {
+        "current": "offline",
+        "lastOnline": null,
+        "lastHeartbeat": null
+      },
+      "metadata": {
+        "firstSeen": "2025-01-01T00:00:00.000Z",
+        "lastUpdated": "2025-01-01T00:00:00.000Z",
+        "totalConnections": 0,
+        "totalUpgrades": 0
+      }
+    }
+  },
+  "settings": {
+    "heartbeatTimeout": 60000,
+    "maxConnectionHistory": 20,
+    "maxUpgradeHistory": 10,
+    "autoCleanupOfflineDevices": false,
+    "offlineCleanupDays": 7
+  },
+  "statistics": {
+    "totalDevices": 0,
+    "onlineDevices": 0,
+    "totalConnections": 0,
+    "lastUpdated": "2025-01-01T00:00:00.000Z"
+  }
+}

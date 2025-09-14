@@ -1,0 +1,63 @@
+{
+  "packages": {
+    "frontend": {
+      "uploadDir": "uploads/packages/frontend",
+      "manifestDir": "manifests/frontend",
+      "maxFileSize": "50MB",
+      "allowedExtensions": [
+        ".zip",
+        ".tar.gz"
+      ],
+      "packages": {
+        "dist.zip": {
+          "fileName": "dist.zip",
+          "fileSize": 1071596,
+          "fileMD5": "d0e1aa2568728284c824404f452f3b11",
+          "version": "unknown",
+          "uploadedAt": "2025-09-12T15:54:42.816Z",
+          "uploadedBy": "system"
+        },
+        "test-direct-upload.zip": {
+          "fileName": "test-direct-upload.zip",
+          "fileSize": 49,
+          "fileMD5": "543a493c04272dc88f6080969ad6dc7f",
+          "version": "unknown",
+          "uploadedAt": "2025-09-12T15:29:10.411Z",
+          "uploadedBy": "system"
+        }
+      }
+    },
+    "backend": {
+      "uploadDir": "uploads/packages/backend",
+      "manifestDir": "manifests/backend",
+      "maxFileSize": "100MB",
+      "allowedExtensions": [
+        ".zip",
+        ".tar.gz"
+      ],
+      "packages": {
+        "test-backend.zip": {
+          "fileName": "test-backend.zip",
+          "fileSize": 21,
+          "fileMD5": "08d2fe061db87a9c1fec326516be95df",
+          "version": "unknown",
+          "uploadedAt": "2025-09-12T15:29:22.618Z",
+          "uploadedBy": "system"
+        }
+      }
+    }
+  },
+  "settings": {
+    "autoCleanup": false,
+    "maxPackageCount": 10,
+    "storageQuota": "500MB"
+  },
+  "statistics": {
+    "totalPackages": 3,
+    "frontendPackages": 2,
+    "backendPackages": 1,
+    "totalSize": "1.02MB",
+    "lastUpdated": "2025-09-14T08:18:57.089Z"
+  },
+  "lastUpdated": "2025-09-14T08:18:57.089Z"
+}

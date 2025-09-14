@@ -1,0 +1,49 @@
+---
+description: Vue 组件模式与组合式 API 最佳实践
+globs: *.vue
+alwaysApply: false
+---
+
+## 组件结构组织
+- **`src/views`**: 页面级组件，与路由绑定
+- **`src/components`**: 原子级、可高度复用的基础组件
+- **页面内组件**: 在 `views` 的子目录 `components` 中，存放仅在该业务模块内部复用的组件
+
+## 组合式 API 规范
+- 使用 `<script setup>` 与组合式 API，获得更好的类型推导和代码组织
+- 为 props 声明类型与默认值，避免在子组件中直接修改 props
+- 通过 `emits` 显式声明组件事件；使用 `v-model` 实现双向绑定
+- 使用 `computed` 管理派生状态，`watch` 处理副作用
+- 谨慎使用 provide/inject 进行深层组件通信 
+  - 适用：组件库封装、全局配置（如主题、语言、权限） 
+  - 慎用：普通业务逻辑中，易造成数据来源不清、依赖隐蔽
+  - 提示：默认非响应式，需搭配 ref / reactive 使用
+- 使用异步组件实现代码分割
+- 使用 Vue 3.4+ 的 `defineModel` API 来实现父子组件间的双向数据绑定。
+
+## 响应式状态管理
+- 用 `ref` 管理基本类型 / 数组 / 对象引用；仅在表单场景使用 `reactive`
+- 使用 `storeToRefs()` 解构 Pinia store 的响应式属性，避免 `computed(() => store.xxx)`
+
+```js
+// ✅ 推荐示例
+const loading = ref(false)
+const form = reactive({ name: '', email: '', age: null })
+
+const venueStore = useVenueStore()
+const { venueList, loading: storeLoading } = storeToRefs(venueStore)
+```
+
+### 注释与生命周期规范
+- 避免装饰性注释，统一简洁风格（如 `// 组件状态`）
+- 为主要业务函数添加 `/** 操作说明 */` 注释
+- 避免在 `onMounted` 中发起数据请求；应在 `setup` 中完成
+
+### Props 处理最佳实践
+- 将 props 视为不可变；如需更改，通过事件通知父组件
+- 必要时在子组件中用 `ref` / `computed` 创建本地副本
+- 当 props 是对象或数组时，警惕嵌套属性变更带来的副作用；必要时深拷贝或拆分局部状态
+
+### 响应式状态管理
+- **优先使用 `ref`**；仅在表单数据需要整体组织时使用 `reactive`
+- 避免在非表单场景滥用 `reactive`
