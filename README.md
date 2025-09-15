@@ -21,7 +21,7 @@
 
 1. **克隆项目**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/zenvor/remote-upgrader
    cd remote-upgrader
    ```
 
@@ -163,7 +163,7 @@ TODO: 添加 Dockerfile 和 docker-compose.yml
 
 ## 🐛 问题反馈
 
-请在 [Issues](https://github.com/your-username/remote-upgrader/issues) 页面提交问题和建议。
+请在 [Issues](https://github.com/zenvor/remote-upgrader/issues) 页面提交问题和建议。
 
 ## 📄 许可证
 
@@ -171,4 +171,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ## 👥 贡献者
 
-- [@your-username](https://github.com/your-username) - 项目维护者
+- [@zenvor](https://github.com/zenvor) - 项目维护者
