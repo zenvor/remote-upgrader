@@ -8,13 +8,18 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { DateHelper } from './common.js';
 
 export default class DeviceIdGenerator {
   constructor() {
     // 中文注释：ESM 环境下构造 __dirname
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    this.deviceIdFile = path.join(__dirname, '../../device-id.json');
+    
+    // 为支持多实例，根据实例ID使用不同的配置文件
+    const instanceId = process.env.AGENT_INSTANCE_ID;
+    const configFileName = instanceId ? `device-info-${instanceId}.json` : 'device-info.json';
+    this.deviceIdFile = path.join(__dirname, '../../config', configFileName);
   }
 
   /**
@@ -97,27 +102,51 @@ export default class DeviceIdGenerator {
    */
   async getBoardInfo() {
     try {
+      // 定义无效标识符黑名单
+      const INVALID_IDENTIFIERS = new Set([
+        'not specified',
+        'unknown',
+        'to be filled by o.e.m.',
+        'default string',
+        'system serial number',
+        '00000000-0000-0000-0000-000000000000',
+        'none',
+        'oem',
+        'system manufacturer',
+        'system product name',
+        'system version',
+        'chassisassetag',
+        'asset-1234567890'
+      ]);
+
+      // 创建校验函数
+      const isValidIdentifier = (id) => {
+        if (!id) return false;
+        const normalizedId = id.toLowerCase().trim();
+        return normalizedId && !INVALID_IDENTIFIERS.has(normalizedId);
+      };
+
       const system = await si.system();
       const baseboard = await si.baseboard();
-      
+
       // 优先使用主板序列号
-      if (baseboard.serial && baseboard.serial !== 'Not Specified' && baseboard.serial !== 'Unknown') {
-        console.log('✅ 获取到主板序列号:', baseboard.serial.substring(0, 8) + '...');
+      if (isValidIdentifier(baseboard.serial)) {
+        console.log('✅ 获取到有效的主板序列号');
         return baseboard.serial;
       }
-      
+
       // 使用主板UUID
-      if (baseboard.uuid && baseboard.uuid !== 'Not Specified') {
-        console.log('✅ 获取到主板UUID:', baseboard.uuid.substring(0, 8) + '...');
+      if (isValidIdentifier(baseboard.uuid)) {
+        console.log('✅ 获取到有效的主板UUID');
         return baseboard.uuid;
       }
-      
+
       // 使用系统UUID
-      if (system.uuid && system.uuid !== 'Not Specified') {
-        console.log('✅ 获取到系统UUID:', system.uuid.substring(0, 8) + '...');
+      if (isValidIdentifier(system.uuid)) {
+        console.log('✅ 获取到有效的系统UUID');
         return system.uuid;
       }
-      
+
       console.log('⚠️ 未找到可用的主板/系统标识符');
       return null;
     } catch (error) {
@@ -143,17 +172,17 @@ export default class DeviceIdGenerator {
       );
       
       if (primaryInterface) {
-        console.log('✅ 获取到主网卡MAC:', primaryInterface.mac);
+        console.log('✅ 获取到主网卡MAC地址');
         return primaryInterface.mac;
       }
-      
+
       // 备选：使用第一个非虚拟接口
-      const firstPhysical = networkInterfaces.find(iface => 
+      const firstPhysical = networkInterfaces.find(iface =>
         !iface.virtual && !iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00'
       );
-      
+
       if (firstPhysical) {
-        console.log('✅ 获取到网卡MAC (备选):', firstPhysical.mac);
+        console.log('✅ 获取到网卡MAC地址 (备选)');
         return firstPhysical.mac;
       }
       
@@ -198,25 +227,38 @@ export default class DeviceIdGenerator {
 
   /**
    * 格式化设备ID
+   * 使用SHA256哈希确保隐私保护和格式统一
    */
   formatDeviceId(type, rawId) {
-    // 创建一个标准格式的设备ID: device-{type}-{hash}
-    const hash = crypto.createHash('md5').update(rawId).digest('hex');
-    return `device-${type}-${hash.substring(0, 12)}`;
+    // 只使用硬件标识，不包含进程相关信息，确保设备ID持久不变
+    // 为了支持同一机器上的多个agent实例，只使用AGENT_INSTANCE_ID（如果设置）
+    const instanceId = process.env.AGENT_INSTANCE_ID;
+    const combinedId = instanceId ? `${rawId}-${instanceId}` : rawId;
+
+    // 使用SHA256哈希保护隐私，避免暴露原始硬件信息
+    const hash = crypto.createHash('sha256').update(combinedId).digest('hex');
+    return `device-${type}-${hash.substring(0, 16)}`;
   }
 
   /**
    * 生成fallback设备ID
+   * 基于主机名和架构信息，确保在同一台机器上保持一致
    */
   generateFallbackId() {
     const hostname = os.hostname();
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8);
-    const combined = `${hostname}-${timestamp}-${random}`;
-    const hash = crypto.createHash('md5').update(combined).digest('hex');
-    
-    console.log('⚠️ 使用fallback设备ID');
-    return `device-fallback-${hash.substring(0, 12)}`;
+    const platform = os.platform();
+    const arch = os.arch();
+    const instanceId = process.env.AGENT_INSTANCE_ID;
+
+    // 使用相对稳定的系统信息，避免使用时间戳和随机数
+    const combined = instanceId
+      ? `${hostname}-${platform}-${arch}-${instanceId}`
+      : `${hostname}-${platform}-${arch}`;
+
+    const hash = crypto.createHash('sha256').update(combined).digest('hex');
+
+    console.log('⚠️ 使用fallback设备ID（基于主机名和系统信息）');
+    return `device-fallback-${hash.substring(0, 16)}`;
   }
 
   /**
@@ -228,7 +270,7 @@ export default class DeviceIdGenerator {
         deviceId,
         method,
         rawValue: rawValue.substring(0, 100), // 限制长度防止敏感信息泄露
-        generatedAt: new Date().toISOString(),
+        generatedAt: DateHelper.getCurrentDate(),
         hostname: os.hostname(),
         platform: os.platform(),
         arch: os.arch()

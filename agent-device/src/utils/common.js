@@ -214,6 +214,32 @@ export class CommandHelper {
 }
 
 /**
+ * 日期格式化工具类
+ */
+export class DateHelper {
+  /**
+   * 格式化日期为 YYYY-MM-dd 格式
+   * @param {Date|string} date - 日期对象或ISO字符串
+   * @returns {string} YYYY-MM-dd 格式的日期字符串
+   */
+  static formatToYYYYMMDD(date) {
+    const d = date instanceof Date ? date : new Date(date || Date.now());
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  /**
+   * 获取当前日期的 YYYY-MM-dd 格式字符串
+   * @returns {string}
+   */
+  static getCurrentDate() {
+    return this.formatToYYYYMMDD(new Date());
+  }
+}
+
+/**
  * 版本信息管理工具
  */
 export class VersionHelper {
@@ -229,7 +255,7 @@ export class VersionHelper {
     return {
       project,
       version,
-      deployTime: new Date().toISOString(),
+      deployTime: DateHelper.getCurrentDate(),
       packagePath: path.basename(packagePath),
       deviceId
     };
@@ -280,7 +306,7 @@ export class BackupHelper {
     return {
       project,
       version,
-      timestamp: new Date().toISOString(),
+      timestamp: DateHelper.getCurrentDate(),
       path: backupPath,
       sourceDir
     };

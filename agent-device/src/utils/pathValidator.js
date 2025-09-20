@@ -131,7 +131,7 @@ export class PathValidator {
       console.warn(`⚠️ 部署路径不安全，回退到默认路径: ${defaultPath}`);
       const defaultValidation = this.validatePath(defaultPath, 'fallback-deploy');
       return {
-        valid: true,
+        valid: false, // 标记为验证失败，因为原始路径不安全
         path: defaultValidation.valid ? defaultValidation.sanitizedPath : defaultPath,
         reason: `输入路径不安全，已回退: ${validation.reason}`
       };
@@ -175,7 +175,8 @@ export function createDefaultPathValidator() {
     '/tmp',        // 临时目录（Linux/Mac）
     process.env.TMPDIR || '/tmp', // 系统临时目录
     '/var/tmp',     // 持久临时目录
-    '/Users/claude/CompanyProjects' // 调试使用
+    '/Users/claude/CompanyProjects', // 调试使用
+    '/opt/1panel/www/sites/t.vdirector.cn/index' // 云服务器部署目录
   ];
 
   // Windows特殊处理

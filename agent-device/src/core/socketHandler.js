@@ -1,5 +1,5 @@
 // 中文注释：Socket 事件处理器（ESM 默认导出）
-import { ErrorLogger } from '../utils/common.js';
+import { ErrorLogger, DateHelper } from '../utils/common.js';
 
 export default class SocketHandler {
   constructor(socket, agent) {
@@ -21,17 +21,17 @@ export default class SocketHandler {
     
     // 升级命令
     this.socket.on('cmd:upgrade', (data) => {
-      this.handleUpgradeCommand(data);
+      this.handleUpgradeCommand(data, data?.commandId);
     });
     
     // 降级命令
     this.socket.on('cmd:rollback', (data) => {
-      this.handleRollbackCommand(data);
+      this.handleRollbackCommand(data, data?.commandId);
     });
     
     // 状态查询命令
     this.socket.on('cmd:status', (data) => {
-      this.handleStatusCommand(data);
+      this.handleStatusCommand(data, data?.commandId);
     });
     
     // 心跳响应
@@ -54,6 +54,7 @@ export default class SocketHandler {
         ErrorLogger.logError('刷新网络信息', error);
       });
     });
+
     
     // 开始心跳
     this.startHeartbeat();
@@ -62,116 +63,171 @@ export default class SocketHandler {
   handleDeviceRegistered(data) {
     console.log('设备注册成功:', data);
     this.agent.reportStatus('registered');
-    // 如果服务端回传了 deployPath，尽快上报存储与回滚能力
-    if (data && data.deployPath) {
-      this.agent.updateSystemInfoAfterRegistration(data.deployPath).catch(error => {
-        ErrorLogger.logError('注册后更新系统信息', error, { deployPath: data.deployPath });
-      });
-    }
+    // 注册后立即上报存储与回滚能力，使用服务端回传的 deployPath 或默认路径
+    const deployPath = (data && data.deployPath) ? data.deployPath : process.cwd();
+    this.agent.updateSystemInfoAfterRegistration(deployPath).catch(error => {
+      ErrorLogger.logError('注册后更新系统信息', error, { deployPath });
+    });
   }
   
-  async handleCommand(data) {
-    console.log('收到服务端命令:', data);
-    
+  async handleCommand(message) {
+    console.log('收到服务端命令:', message);
+
+    const command = message?.command;
+    const params = message?.params ?? message?.data ?? {};
+    const messageId = message?.messageId || message?.commandId || null;
+
     try {
-      switch (data.command) {
+      switch (command) {
         case 'cmd:upgrade':
-          await this.handleUpgradeCommand(data.data);
+          await this.handleUpgradeCommand(params, messageId);
           break;
         case 'cmd:rollback':
-          await this.handleRollbackCommand(data.data);
+          await this.handleRollbackCommand(params, messageId);
           break;
         case 'cmd:status':
-          await this.handleStatusCommand(data.data);
+          await this.handleStatusCommand(params, messageId);
+          break;
+        case 'getCurrentVersion':
+          await this.handleGetCurrentVersionCommand(params, messageId);
+          break;
+        case 'getDeployPath':
+          console.warn('getDeployPath 命令已废弃，不再支持');
+          if (messageId) {
+            this.sendCommandResult(messageId, false, 'getDeployPath 命令已废弃');
+          }
           break;
         default:
-          console.warn('未知命令:', data.command);
+          console.warn('未知命令:', command);
+          if (messageId) {
+            this.sendCommandResult(messageId, false, '不支持的命令');
+          }
       }
     } catch (error) {
       console.error('命令处理失败:', error);
-      this.sendCommandResult(data.commandId, false, error.message);
+      if (messageId) {
+        this.sendCommandResult(messageId, false, error.message);
+      }
     }
   }
   
-  async handleUpgradeCommand(data) {
+  async handleUpgradeCommand(data, messageId = null) {
     console.log('执行升级命令:', data);
-    
+
+    const commandId = messageId || data?.commandId || null;
+
     try {
       this.agent.reportStatus('upgrading');
-      
+
       const { project, fileName, version, deployPath } = data;
-      
+
       // 1. 下载升级包
       console.log('开始下载升级包...');
       const downloadResult = await this.agent.getDownloadManager()
         .downloadPackage(project, fileName);
-      
+
       if (!downloadResult.success) {
         throw new Error(`下载失败: ${downloadResult.error}`);
       }
-      
+
       // 2. 部署升级包
       console.log('开始部署升级包...');
       const deployResult = await this.agent.getDeployManager()
-        .deploy(project, downloadResult.filePath, version, deployPath);
-      
+        .deploy(project, downloadResult.filePath, version, deployPath, data.fileMD5 || null);
+
       if (!deployResult.success) {
         throw new Error(`部署失败: ${deployResult.error}`);
       }
-      
+
       this.agent.reportStatus('upgrade_success');
-      this.sendCommandResult(data.commandId, true, '升级成功');
-      // 升级成功后，立即刷新 storage/rollbackAvailable 等
-      if (deployPath) {
-        this.agent.updateSystemInfoAfterRegistration(deployPath).catch(error => {
+
+      if (commandId) {
+        const packageInfo = deployResult.packageInfo
+          ? { ...deployResult.packageInfo }
+          : null;
+        if (packageInfo && data.fileMD5) {
+          packageInfo.fileMD5 = data.fileMD5;
+        }
+
+        this.sendCommandResult(commandId, true, '升级成功', {
+          operation: 'upgrade',
+          project,
+          version,
+          deployPath: deployResult.deployPath || deployPath || null,
+          packageInfo
+        });
+      }
+
+      // 升级成功后刷新系统信息，确保回滚状态与磁盘信息更新
+      const actualDeployPath = deployResult.deployPath || deployPath;
+      if (actualDeployPath) {
+        this.agent.updateSystemInfoAfterRegistration(actualDeployPath).catch(error => {
           console.error('升级后更新系统信息失败:', error.message);
         });
       }
-      
+
       console.log('升级完成');
     } catch (error) {
       console.error('升级失败:', error);
       this.agent.reportStatus('upgrade_failed');
-      this.sendCommandResult(data.commandId, false, error.message);
+      if (commandId) {
+        this.sendCommandResult(commandId, false, error.message);
+      }
     }
   }
   
-  async handleRollbackCommand(data) {
+  async handleRollbackCommand(data, messageId = null) {
     console.log('执行降级命令:', data);
-    
+
+    const commandId = messageId || data?.commandId || null;
+
     try {
       this.agent.reportStatus('rolling_back');
-      
-      const { project, version } = data;
-      
+
+      const { project } = data;
+
       // 执行回滚
       const rollbackResult = await this.agent.getDeployManager()
-        .rollback(project, version);
-      
+        .rollback(project);
+
       if (!rollbackResult.success) {
         throw new Error(`回滚失败: ${rollbackResult.error}`);
       }
-      
+
       this.agent.reportStatus('rollback_success');
-      this.sendCommandResult(data.commandId, true, '回滚成功');
-      // 回滚完成后，同步刷新 storage/rollbackAvailable 等
-      const dp = data?.deployPath;
-      if (dp) {
-        this.agent.updateSystemInfoAfterRegistration(dp).catch(error => {
+
+      if (commandId) {
+        this.sendCommandResult(commandId, true, '回滚成功', {
+          operation: 'rollback',
+          project,
+          deployPath: rollbackResult.deployPath || null
+        });
+      }
+
+      // 回滚完成后，同步刷新系统信息
+      const targetPath = rollbackResult.deployPath
+        || (project === 'backend' ? this.agent.config.deploy.backendDir : this.agent.config.deploy.frontendDir);
+
+      if (targetPath) {
+        this.agent.updateSystemInfoAfterRegistration(targetPath).catch(error => {
           console.error('回滚后更新系统信息失败:', error.message);
         });
       }
-      
+
       console.log('回滚完成');
     } catch (error) {
       console.error('回滚失败:', error);
       this.agent.reportStatus('rollback_failed');
-      this.sendCommandResult(data.commandId, false, error.message);
+      if (commandId) {
+        this.sendCommandResult(commandId, false, error.message);
+      }
     }
   }
   
-  async handleStatusCommand(data) {
+  async handleStatusCommand(data, messageId = null) {
     console.log('查询设备状态:', data);
+
+    const commandId = messageId || data?.commandId || null;
 
     try {
       const si = await import('systeminformation');
@@ -180,7 +236,7 @@ export default class SocketHandler {
       const deployManager = this.agent.getDeployManager();
       const status = {
         deviceId: this.agent.config.device.id,
-        timestamp: new Date().toISOString(),
+        timestamp: DateHelper.getCurrentDate(),
         frontend: await deployManager.getCurrentVersion('frontend'),
         backend: await deployManager.getCurrentVersion('backend'),
         system: {
@@ -192,10 +248,14 @@ export default class SocketHandler {
         }
       };
 
-      this.sendCommandResult(data.commandId, true, '状态查询成功', status);
+      if (commandId) {
+        this.sendCommandResult(commandId, true, '状态查询成功', status);
+      }
     } catch (error) {
       console.error('状态查询失败:', error);
-      this.sendCommandResult(data.commandId, false, error.message);
+      if (commandId) {
+        this.sendCommandResult(commandId, false, error.message);
+      }
     }
   }
   
@@ -231,16 +291,75 @@ export default class SocketHandler {
   }
   
   sendCommandResult(commandId, success, message, data = null) {
-    this.socket.emit('command:result', {
+    const response = {
       commandId,
       deviceId: this.agent.config.device.id,
       success,
       message,
       data,
-      timestamp: new Date().toISOString()
-    });
+      timestamp: DateHelper.getCurrentDate()
+    };
+
+    // 发送传统格式响应
+    this.socket.emit('command:result', response);
+
+    // 如果 commandId 看起来像 messageId (含有 cmd_ 前缀)，也发送新格式响应
+    if (commandId && commandId.startsWith('cmd_')) {
+      this.socket.emit(`response:${commandId}`, response);
+    }
   }
-  
+
+  // 版本管理命令处理方法
+  async handleGetCurrentVersionCommand(params, messageId = null) {
+    console.log('📋 开始处理 getCurrentVersion 命令:', params);
+
+    const commandId = messageId || params?.commandId || null;
+
+    try {
+      const { project } = params;
+
+      if (!project || !['frontend', 'backend'].includes(project)) {
+        if (commandId) {
+          this.sendCommandResult(commandId, false, '项目类型参数无效，必须是 frontend 或 backend');
+        }
+        return;
+      }
+
+      const deployManager = this.agent.getDeployManager();
+      const versionInfo = await deployManager.getCurrentVersion(project);
+
+      if (!versionInfo?.success) {
+        throw new Error(versionInfo?.error || '获取版本信息失败');
+      }
+
+      if (commandId) {
+        this.sendCommandResult(commandId, true, '获取当前版本成功', versionInfo);
+      }
+    } catch (error) {
+      console.error('❌ 获取当前版本失败:', error);
+      if (commandId) {
+        this.sendCommandResult(commandId, false, error.message);
+      }
+    }
+  }
+
+
+  /**
+   * 发送通知到服务器
+   */
+  sendNotification(eventName, data) {
+    try {
+      if (this.socket && this.socket.connected) {
+        this.socket.emit(eventName, data);
+        console.log(`📡 已发送通知到服务器: ${eventName}`);
+      } else {
+        console.warn('无法发送通知：Socket 未连接');
+      }
+    } catch (error) {
+      console.error('发送通知失败:', error);
+    }
+  }
+
   cleanup() {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);

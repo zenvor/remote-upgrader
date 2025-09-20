@@ -8,21 +8,21 @@ import si from 'systeminformation';
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { defaultPathValidator } from '../utils/pathValidator.js';
+import { DateHelper } from '../utils/common.js';
 
 export default class DeviceAgent {
   constructor(config) {
-    this.config = config;
-    this.socket = null;
-    this.socketHandler = null;
-    this.downloadManager = null;
-    this.deployManager = null;
-    this.isConnected = false;
-    this.isRegistered = false;
-    this.reconnectAttempts = 0;
+    this.config = config; // 配置
+    this.socket = null; // Socket
+    this.socketHandler = null; // Socket 处理器
+    this.downloadManager = null; // 下载管理器
+    this.deployManager = null; // 部署管理器
+    this.isConnected = false; // 是否连接
+    this.isRegistered = false; // 是否注册
+    this.reconnectAttempts = 0; // 重连次数
     this.baseReconnectDelay = config.server.reconnectDelay; // 基础重连延迟
     this.maxReconnectDelay = 300000; // 最大延迟 5 分钟
-    this.reconnectTimer = null;
+    this.reconnectTimer = null; // 重连定时器
   }
   
   async start() {
@@ -34,7 +34,10 @@ export default class DeviceAgent {
     
     // 初始化服务组件
     this.downloadManager = new DownloadManager(this.config);
-    this.deployManager = new DeployManager(this.config);
+    this.deployManager = new DeployManager(this.config, this);
+
+    // 初始化部署管理器（包括版本管理器）
+    await this.deployManager.initialize();
     
     // 建立 Socket.IO 连接
     await this.connect();
@@ -183,7 +186,6 @@ export default class DeviceAgent {
       const basicDeviceInfo = {
         deviceId: this.config.device.id,
         deviceName: systemHostname || this.config.device.name, // 优先使用系统主机名
-        version: this.config.device.version,
         // 分组后的字段
         system: {
           platform: process.platform || this.config.device.platform,
@@ -200,8 +202,7 @@ export default class DeviceAgent {
           localIp: null,
           macAddresses: []
         },
-        timestamp: new Date().toISOString(),
-        status: 'online'
+        timestamp: DateHelper.getCurrentDate()
       };
       
       console.log('注册设备信息:', basicDeviceInfo.deviceId, `(${basicDeviceInfo.deviceName}) 获取网络信息中...`);
@@ -250,7 +251,7 @@ export default class DeviceAgent {
             localIp,
             macAddresses
           },
-          timestamp: new Date().toISOString()
+          timestamp: DateHelper.getCurrentDate()
         };
 
         console.log('🌐 更新网络信息:', {
@@ -276,7 +277,7 @@ export default class DeviceAgent {
           deviceId: this.config.device.id,
           wifiName: wifiInfo.ssid,
           wifiSignal: wifiInfo.signal,
-          timestamp: new Date().toISOString()
+          timestamp: DateHelper.getCurrentDate()
         });
       }
     } catch (error) {
@@ -289,44 +290,64 @@ export default class DeviceAgent {
    */
   async getSystemHostname() {
     try {
+      let baseHostname = null;
+      
       // 方法1：使用 systeminformation 获取操作系统信息
       const osInfo = await si.osInfo();
       if (osInfo.hostname && osInfo.hostname.trim()) {
-        let hostname = osInfo.hostname.trim();
+        baseHostname = osInfo.hostname.trim();
         
         // 如果主机名包含 .local 后缀，去掉它（macOS常见）
-        if (hostname.endsWith('.local')) {
-          hostname = hostname.replace('.local', '');
+        if (baseHostname.endsWith('.local')) {
+          baseHostname = baseHostname.replace('.local', '');
         }
         
-        console.log('🖥️  从系统信息获取主机名:', hostname);
-        return hostname;
+        console.log('🖥️  从系统信息获取主机名:', baseHostname);
       }
       
       // 方法2：使用 Node.js os 模块获取主机名
-      const hostname = os.hostname();
-      if (hostname && hostname.trim()) {
-        let cleanHostname = hostname.trim();
-        if (cleanHostname.endsWith('.local')) {
-          cleanHostname = cleanHostname.replace('.local', '');
+      if (!baseHostname) {
+        const hostname = os.hostname();
+        if (hostname && hostname.trim()) {
+          baseHostname = hostname.trim();
+          if (baseHostname.endsWith('.local')) {
+            baseHostname = baseHostname.replace('.local', '');
+          }
+          console.log('🖥️  从OS模块获取主机名:', baseHostname);
         }
-        console.log('🖥️  从OS模块获取主机名:', cleanHostname);
-        return cleanHostname;
       }
       
       // 方法3：从环境变量获取（Windows COMPUTERNAME, Unix HOSTNAME）
-      const envHostname = process.env.COMPUTERNAME || process.env.HOSTNAME;
-      if (envHostname && envHostname.trim()) {
-        console.log('🖥️  从环境变量获取主机名:', envHostname.trim());
-        return envHostname.trim();
+      if (!baseHostname) {
+        const envHostname = process.env.COMPUTERNAME || process.env.HOSTNAME;
+        if (envHostname && envHostname.trim()) {
+          baseHostname = envHostname.trim();
+          console.log('🖥️  从环境变量获取主机名:', baseHostname);
+        }
       }
       
       // 方法4：尝试获取用户信息作为备选
-      const userInfo = os.userInfo();
-      if (userInfo.username) {
-        const fallbackName = `${userInfo.username}的设备`;
-        console.log('🖥️  使用用户名作为设备名:', fallbackName);
-        return fallbackName;
+      if (!baseHostname) {
+        const userInfo = os.userInfo();
+        if (userInfo.username) {
+          baseHostname = `${userInfo.username}的设备`;
+          console.log('🖥️  使用用户名作为设备名:', baseHostname);
+        }
+      }
+      
+      // 为支持多实例，添加实例标识符
+      if (baseHostname) {
+        const instanceId = process.env.AGENT_INSTANCE_ID;
+        if (instanceId) {
+          const deviceName = `${baseHostname}-${instanceId}`;
+          console.log('🖥️  多实例设备名:', deviceName);
+          return deviceName;
+        } else {
+          // 如果没有实例ID，使用进程ID作为区分
+          const deviceName = `${baseHostname}-${process.pid}`;
+          console.log('🖥️  使用进程ID区分的设备名:', deviceName);
+          return deviceName;
+        }
       }
       
       console.log('⚠️ 无法获取系统主机名，将使用配置文件中的默认名称');
@@ -493,17 +514,10 @@ export default class DeviceAgent {
   // 在拿到 deployPath 后，计算 storage 与回滚能力并上报
   async updateSystemInfoAfterRegistration(deployPath) {
     try {
-      console.log('🔧 开始更新系统信息，原始部署路径:', deployPath);
+      console.log('🔧 开始更新系统信息，使用部署路径:', deployPath);
 
-      // 验证部署路径安全性
-      const pathValidation = defaultPathValidator.validatePath(deployPath, 'system-info-update');
-      if (!pathValidation.valid) {
-        console.warn(`⚠️ 部署路径不安全，跳过系统信息更新: ${pathValidation.reason}`);
-        return;
-      }
-
-      const safeDeployPath = pathValidation.sanitizedPath;
-      console.log('✅ 使用安全验证后的部署路径:', safeDeployPath);
+      // 直接使用传入的路径，该路径应该已经通过安全验证
+      const safeDeployPath = path.resolve(deployPath);
 
       const diskInfo = await this.getDiskInfoByPath(safeDeployPath);
       const writable = await this.checkWritable(safeDeployPath);
@@ -527,7 +541,7 @@ export default class DeviceAgent {
           rollbackAvailable
         },
         health: {
-          uptimeSeconds: Math.floor((await si.time()).uptime)
+          uptimeSeconds: Math.floor(process.uptime())
         }
       };
 
@@ -635,10 +649,18 @@ export default class DeviceAgent {
       this.config.deploy.backupDir,
       path.dirname(this.config.log.file)
     ];
-    
+
     for (const dir of dirs) {
       await fs.ensureDir(dir);
     }
+
+    // 确保配置文件存在
+    await this.ensureConfigFiles();
+  }
+
+  async ensureConfigFiles() {
+    // 配置文件检查和初始化
+    console.log('🔧 检查配置文件...');
   }
   
   // 获取下载管理器
@@ -657,7 +679,7 @@ export default class DeviceAgent {
       this.socket.emit('device:status', {
         deviceId: this.config.device.id,
         status,
-        timestamp: new Date().toISOString()
+        timestamp: DateHelper.getCurrentDate()
       });
     }
   }

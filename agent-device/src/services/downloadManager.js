@@ -27,7 +27,7 @@ export default class DownloadManager {
       const targetPath = path.join(this.packageDir, project, fileName);
       
       // 2. 检查是否已存在且完整  
-      const expectedMd5 = packageInfo.fileMd5 || packageInfo.md5;
+      const expectedMd5 = packageInfo.fileMD5;
       if (await this.isFileComplete(targetPath, expectedMd5)) {
         console.log('文件已存在且完整，跳过下载');
         return {
@@ -132,7 +132,7 @@ export default class DownloadManager {
           try {
             // 验证 MD5
             const fileMd5 = await this.calculateMd5(tempPath);
-            const expectedMd5 = packageInfo.fileMd5 || packageInfo.md5;
+            const expectedMd5 = packageInfo.fileMD5;
             if (fileMd5 !== expectedMd5) {
               throw new Error(`文件校验失败，期望: ${expectedMd5}，实际: ${fileMd5}`);
             }
