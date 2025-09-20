@@ -7,12 +7,50 @@ import { ErrorLogger, FileHelper, DeployResult, BackupHelper, VersionHelper } fr
 
 export default class DeployManager {
   constructor(config, agent = null) {
+    // 参数验证
+    if (!config) {
+      throw new Error('配置参数不能为空')
+    }
+
     this.config = config
     this.agent = agent // 添加 agent 引用用于通信
+
+    // 常量配置
+    this.constants = {
+      maxDisplayFiles: 15, // 目录状态检查显示的最大文件数
+      configDir: config.deploy?.configDir || './config', // 配置文件目录
+      deployPathsConfigFile: 'deploy-paths.json', // 部署路径配置文件名
+      processTimeout: 60_000, // 子进程超时（60秒）
+      maxBackupNameLength: 50, // 备份名称最大长度
+      backupRetentionDays: 30 // 备份保留天数
+    }
+
     this.frontendDir = config.deploy.frontendDir
     this.backendDir = config.deploy.backendDir
     this.backupDir = config.deploy.backupDir
     this.maxBackups = config.deploy.maxBackups
+
+    // 验证必需的配置
+    this.validateConfig()
+  }
+
+  validateConfig() {
+    const requiredFields = [
+      'deploy.frontendDir',
+      'deploy.backendDir',
+      'deploy.backupDir'
+    ]
+
+    for (const field of requiredFields) {
+      const value = this.getNestedValue(this.config, field)
+      if (!value) {
+        throw new Error(`配置缺少必需字段: ${field}`)
+      }
+    }
+  }
+
+  getNestedValue(obj, path) {
+    return path.split('.').reduce((current, key) => current?.[key], obj)
   }
 
   async initialize() {
@@ -36,7 +74,14 @@ export default class DeployManager {
     }
   }
 
-  async deploy(project, packagePath, version, deployPathOverride = null) {
+  async deploy(project, packagePath, version, deployPathOverride = null, fileMD5 = null) {
+    // 参数验证
+    if (!project || !packagePath) {
+      throw new Error('project 和 packagePath 参数不能为空')
+    }
+    if (!['frontend', 'backend'].includes(project)) {
+      throw new Error('project 必须是 frontend 或 backend')
+    }
     console.log(`开始部署 ${project} 包: ${packagePath}`)
 
     try {
@@ -181,6 +226,13 @@ export default class DeployManager {
   }
 
   async createBackup(project, version, sourceDirOverride = null) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
+    if (!['frontend', 'backend'].includes(project)) {
+      throw new Error('project 必须是 frontend 或 backend')
+    }
     const defaultSource = project === 'frontend' ? this.frontendDir : this.backendDir
     const sourceDir = sourceDirOverride || defaultSource
 
@@ -226,6 +278,10 @@ export default class DeployManager {
   }
 
   async extractAndDeploy(packagePath, targetDir, project) {
+    // 参数验证
+    if (!packagePath || !targetDir || !project) {
+      throw new Error('packagePath, targetDir 和 project 参数不能为空')
+    }
     try {
       // 确保目标目录存在
       await fs.ensureDir(targetDir)
@@ -272,7 +328,7 @@ export default class DeployManager {
           console.warn(`⚠️ 警告：解压后目录为空！`)
         }
       } catch (verifyError) {
-        console.error(`❌ 解压后验证失败: ${verifyError.message}`)
+        ErrorLogger.logError('解压后验证失败', verifyError, { targetDir })
       }
 
       return extractResult
@@ -291,7 +347,8 @@ export default class DeployManager {
 
       // 使用系统的 unzip 命令
       const unzip = spawn('unzip', ['-o', zipPath, '-d', targetDir], {
-        stdio: 'pipe'
+        stdio: 'pipe',
+        timeout: this.constants.processTimeout
       })
 
       let stdout = ''
@@ -317,9 +374,9 @@ export default class DeployManager {
         } else {
           if (stdout) console.log(`📄 标准输出: ${stdout}`)
           if (stderr) console.log(`📄 错误输出: ${stderr}`)
-          console.error(`❌ ZIP 解压失败，退出码: ${code}`)
-          ErrorLogger.logError('ZIP 解压', new Error(stderr))
-          reject(new Error(`解压失败: ${stderr || 'Unknown error'}`))
+          const error = new Error(`解压失败: ${stderr || 'Unknown error'}`)
+          ErrorLogger.logError('ZIP 解压', error, { code, zipPath, targetDir })
+          reject(error)
         }
       })
 
@@ -333,7 +390,8 @@ export default class DeployManager {
     return new Promise((resolve, reject) => {
       // 使用系统的 tar 命令
       const tar = spawn('tar', ['-xf', tarPath, '-C', targetDir], {
-        stdio: 'pipe'
+        stdio: 'pipe',
+        timeout: this.constants.processTimeout
       })
 
       let stderr = ''
@@ -347,8 +405,9 @@ export default class DeployManager {
           console.log('TAR 解压成功')
           resolve(DeployResult.success('TAR 解压完成'))
         } else {
-          ErrorLogger.logError('TAR 解压', new Error(stderr))
-          reject(new Error(`解压失败: ${stderr}`))
+          const error = new Error(`解压失败: ${stderr}`)
+          ErrorLogger.logError('TAR 解压', error, { code, tarPath, targetDir })
+          reject(error)
         }
       })
 
@@ -359,6 +418,10 @@ export default class DeployManager {
   }
 
   async updateVersionInfo(project, version, packagePath, targetDirOverride = null) {
+    // 参数验证
+    if (!project || !version || !packagePath) {
+      throw new Error('project, version 和 packagePath 参数不能为空')
+    }
     const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
     const targetDir = targetDirOverride || defaultTarget
     const versionFile = path.join(targetDir, 'version.json')
@@ -436,7 +499,7 @@ export default class DeployManager {
       console.log(`  💾 总大小: ${this.formatFileSize(totalSize)}`)
 
       // 显示详细文件列表（限制显示数量以免刷屏）
-      const maxDisplay = 15
+      const maxDisplay = this.constants.maxDisplayFiles
       console.log(`\n📋 ${stage} 文件详情 (显示前 ${Math.min(files.length, maxDisplay)} 项):`)
 
       for (const [index, item] of fileDetails.slice(0, maxDisplay).entries()) {
@@ -452,7 +515,7 @@ export default class DeployManager {
 
       console.log('') // 空行分隔
     } catch (error) {
-      console.error(`❌ ${stage} 目录状态检查失败: ${error.message}`)
+      ErrorLogger.logError(`${stage}目录状态检查失败`, error, { targetDir: absoluteTargetDir })
     }
   }
 
@@ -492,7 +555,7 @@ export default class DeployManager {
         console.log(`✅ 目标目录清空成功`)
       }
     } catch (emptyError) {
-      console.error(`❌ fs.emptyDir 失败: ${emptyError.message}`)
+      ErrorLogger.logError('fs.emptyDir 失败', emptyError, { targetDir })
 
       // Fs.emptyDir 完全失败时，尝试读取目录并强制清空
       try {
@@ -502,7 +565,7 @@ export default class DeployManager {
           await this.forceEmptyDirectory(targetDir, files)
         }
       } catch (readError) {
-        console.error(`❌ 无法读取目录内容: ${readError.message}`)
+        ErrorLogger.logError('无法读取目录内容', readError, { targetDir })
         throw new Error(`无法清空目标目录: ${emptyError.message}`)
       }
     }
@@ -524,7 +587,7 @@ export default class DeployManager {
         remainingFiles = remainingFiles.filter((f) => f !== file)
         console.log(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
       } catch (removeError) {
-        console.error(`❌ fs.remove 删除失败 ${file}: ${removeError.message}`)
+        ErrorLogger.logError(`fs.remove 删除失败 ${file}`, removeError, { filePath })
       }
     }
 
@@ -559,7 +622,8 @@ export default class DeployManager {
       // 使用 rm -rf 强制删除所有内容
       const rm = spawn('rm', ['-rf', ...fileList.map((f) => path.join(targetDir, f))], {
         cwd: targetDir,
-        stdio: 'pipe'
+        stdio: 'pipe',
+        timeout: this.constants.processTimeout
       })
 
       let stderr = ''
@@ -575,17 +639,19 @@ export default class DeployManager {
             console.log(`✅ 系统命令删除成功`)
             resolve()
           } else {
-            console.error(`❌ 系统命令删除后仍有剩余文件: ${finalFiles.join(', ')}`)
-            reject(new Error(`无法完全清空目录，剩余 ${finalFiles.length} 个文件`))
+            const error = new Error(`无法完全清空目录，剩余 ${finalFiles.length} 个文件`)
+            ErrorLogger.logError('系统命令删除后仍有剩余文件', error, { finalFiles, targetDir })
+            reject(error)
           }
         } else {
-          console.error(`❌ 系统命令删除失败: ${stderr}`)
-          reject(new Error(`系统命令删除失败: ${stderr}`))
+          const error = new Error(`系统命令删除失败: ${stderr}`)
+          ErrorLogger.logError('系统命令删除失败', error, { code, targetDir })
+          reject(error)
         }
       })
 
       rm.on('error', (error) => {
-        console.error(`❌ 系统命令执行错误: ${error.message}`)
+        ErrorLogger.logError('系统命令执行错误', error, { targetDir })
         reject(error)
       })
     })
@@ -609,7 +675,8 @@ export default class DeployManager {
         .join('; ')
 
       const powershell = spawn('powershell', ['-Command', deleteCommands], {
-        stdio: 'pipe'
+        stdio: 'pipe',
+        timeout: this.constants.processTimeout
       })
 
       let stderr = ''
@@ -624,20 +691,27 @@ export default class DeployManager {
           console.log(`✅ PowerShell 删除成功`)
           resolve()
         } else {
-          console.error(`❌ PowerShell 删除后仍有剩余文件: ${finalFiles.join(', ')}`)
-          if (stderr) console.error(`❌ PowerShell 错误: ${stderr}`)
-          reject(new Error(`无法完全清空目录，剩余 ${finalFiles.length} 个文件`))
+          const error = new Error(`无法完全清空目录，剩余 ${finalFiles.length} 个文件`)
+          ErrorLogger.logError('PowerShell 删除后仍有剩余文件', error, { finalFiles, stderr, targetDir })
+          reject(error)
         }
       })
 
       powershell.on('error', (error) => {
-        console.error(`❌ PowerShell 执行错误: ${error.message}`)
+        ErrorLogger.logError('PowerShell 执行错误', error, { targetDir })
         reject(error)
       })
     })
   }
 
   async rollback(project, targetVersion = null) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
+    if (!['frontend', 'backend'].includes(project)) {
+      throw new Error('project 必须是 frontend 或 backend')
+    }
     console.log(`开始回滚 ${project} 到版本: ${targetVersion || '最新备份'}`)
 
     try {
@@ -719,7 +793,7 @@ export default class DeployManager {
         deployPath: targetDir
       })
     } catch (rollbackError) {
-      console.error(`❌ 回滚执行失败: ${rollbackError.message}`)
+      ErrorLogger.logError('回滚执行失败', rollbackError, { project, backupPath, targetDir })
       throw rollbackError
     }
   }
@@ -808,6 +882,13 @@ export default class DeployManager {
   }
 
   async getCurrentVersion(project) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
+    if (!['frontend', 'backend'].includes(project)) {
+      throw new Error('project 必须是 frontend 或 backend')
+    }
     try {
       // 获取实际配置的部署路径
       const actualDeployPath = await this.getActualDeployPath(project)
@@ -847,9 +928,13 @@ export default class DeployManager {
    * 获取实际配置的部署路径
    */
   async getActualDeployPath(project) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
     try {
-      // 使用配置目录的固定路径
-      const deployPathsFile = path.join('./config', 'deploy-paths.json')
+      // 使用配置的配置目录路径
+      const deployPathsFile = path.join(this.constants.configDir, this.constants.deployPathsConfigFile)
 
       if (await fs.pathExists(deployPathsFile)) {
         const deployPaths = await fs.readJson(deployPathsFile)
@@ -868,7 +953,7 @@ export default class DeployManager {
    */
   async initializeDeployPathsConfig() {
     try {
-      const deployPathsFile = path.join('./config', 'deploy-paths.json')
+      const deployPathsFile = path.join(this.constants.configDir, this.constants.deployPathsConfigFile)
 
       // 确保配置目录存在
       await fs.ensureDir(path.dirname(deployPathsFile))
@@ -900,8 +985,12 @@ export default class DeployManager {
    * 更新部署路径配置文件
    */
   async updateDeployPathConfig(project, deployPath) {
+    // 参数验证
+    if (!project || !deployPath) {
+      throw new Error('project 和 deployPath 参数不能为空')
+    }
     try {
-      const deployPathsFile = path.join('./config', 'deploy-paths.json')
+      const deployPathsFile = path.join(this.constants.configDir, this.constants.deployPathsConfigFile)
       let deployPaths = {}
 
       // 读取现有配置（如果存在）
@@ -963,6 +1052,10 @@ export default class DeployManager {
    * 只有在配置了 maxBackups 且大于0时才会执行清理
    */
   async cleanupOldBackups(project) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
     try {
       if (!this.maxBackups || this.maxBackups <= 0) {
         console.log(`🗂 未配置备份数量限制，保留所有 ${project} 备份`)
@@ -998,6 +1091,10 @@ export default class DeployManager {
    * 获取备份摘要信息
    */
   async getBackupSummary(project) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
     try {
       const availableBackups = await this.getAvailableBackups(project)
       const latestBackupPath = path.join(this.backupDir, `${project}-latest`)

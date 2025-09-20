@@ -7,12 +7,19 @@ import { fileURLToPath } from 'node:url'
 import fs from 'fs-extra'
 import si from 'systeminformation'
 import machineIdModule from 'node-machine-id'
-import { DateHelper } from './common.js'
+import { DateHelper, ErrorLogger } from './common.js'
 
 const { machineId, machineIdSync } = machineIdModule
 
 export default class DeviceIdGenerator {
-  constructor() {
+  constructor(configDir = null) {
+    // 常量配置
+    this.constants = {
+      maxRawValueLength: 100, // 原始值最大长度
+      hashLength: 16, // 哈希值截取长度
+      systemHashLength: 32, // 系统哈希值长度
+      configDirDefault: '../../config' // 默认配置目录
+    }
     // 中文注释：ESM 环境下构造 __dirname
     const __filename = fileURLToPath(import.meta.url)
     const __dirname = path.dirname(__filename)
@@ -20,7 +27,8 @@ export default class DeviceIdGenerator {
     // 为支持多实例，根据实例ID使用不同的配置文件
     const instanceId = process.env.AGENT_INSTANCE_ID
     const configFileName = instanceId ? `device-info-${instanceId}.json` : 'device-info.json'
-    this.deviceIdFile = path.join(__dirname, '../../config', configFileName)
+    const targetConfigDir = configDir || this.constants.configDirDefault
+    this.deviceIdFile = path.join(__dirname, targetConfigDir, configFileName)
   }
 
   /**
@@ -68,7 +76,7 @@ export default class DeviceIdGenerator {
       await this.saveDeviceId(deviceId, 'system-generated', systemId)
       return deviceId
     } catch (error) {
-      console.error('❌ 生成设备ID时出错:', error)
+      ErrorLogger.logError('生成设备ID失败', error)
       // 最后的fallback：生成随机ID并保存
       const fallbackId = this.generateFallbackId()
       await this.saveDeviceId(fallbackId, 'fallback', 'random-generated')
@@ -91,7 +99,7 @@ export default class DeviceIdGenerator {
         console.log('✅ 获取到机器UUID (同步):', id.slice(0, 8) + '...')
         return id
       } catch (syncError) {
-        console.log('⚠️ 无法获取机器UUID:', syncError.message)
+        ErrorLogger.logWarning('无法获取机器UUID', syncError.message)
         return null
       }
     }
@@ -150,7 +158,7 @@ export default class DeviceIdGenerator {
       console.log('⚠️ 未找到可用的主板/系统标识符')
       return null
     } catch (error) {
-      console.log('⚠️ 获取主板信息失败:', error.message)
+      ErrorLogger.logWarning('获取主板信息失败', error.message)
       return null
     }
   }
@@ -190,7 +198,7 @@ export default class DeviceIdGenerator {
       console.log('⚠️ 未找到可用的物理网络接口')
       return null
     } catch (error) {
-      console.log('⚠️ 获取网络接口失败:', error.message)
+      ErrorLogger.logWarning('获取网络接口失败', error.message)
       return null
     }
   }
@@ -219,9 +227,9 @@ export default class DeviceIdGenerator {
       const hash = crypto.createHash('sha256').update(combined).digest('hex')
 
       console.log('✅ 基于系统信息生成ID:', hash.slice(0, 16) + '...')
-      return hash.slice(0, 32) // 取前32位
+      return hash.slice(0, this.constants.systemHashLength) // 取前32位
     } catch (error) {
-      console.log('⚠️ 生成系统ID失败:', error.message)
+      ErrorLogger.logError('生成系统ID失败', error)
       throw error
     }
   }
@@ -231,6 +239,13 @@ export default class DeviceIdGenerator {
    * 使用SHA256哈希确保隐私保护和格式统一
    */
   formatDeviceId(type, rawId) {
+    // 参数验证
+    if (!type || typeof type !== 'string') {
+      throw new Error('type 参数不能为空且必须是字符串')
+    }
+    if (!rawId || typeof rawId !== 'string') {
+      throw new Error('rawId 参数不能为空且必须是字符串')
+    }
     // 只使用硬件标识，不包含进程相关信息，确保设备ID持久不变
     // 为了支持同一机器上的多个agent实例，只使用AGENT_INSTANCE_ID（如果设置）
     const instanceId = process.env.AGENT_INSTANCE_ID
@@ -238,7 +253,7 @@ export default class DeviceIdGenerator {
 
     // 使用SHA256哈希保护隐私，避免暴露原始硬件信息
     const hash = crypto.createHash('sha256').update(combinedId).digest('hex')
-    return `device-${type}-${hash.slice(0, 16)}`
+    return `device-${type}-${hash.slice(0, this.constants.hashLength)}`
   }
 
   /**
@@ -257,18 +272,22 @@ export default class DeviceIdGenerator {
     const hash = crypto.createHash('sha256').update(combined).digest('hex')
 
     console.log('⚠️ 使用fallback设备ID（基于主机名和系统信息）')
-    return `device-fallback-${hash.slice(0, 16)}`
+    return `device-fallback-${hash.slice(0, this.constants.hashLength)}`
   }
 
   /**
    * 保存设备ID到本地文件
    */
   async saveDeviceId(deviceId, method, rawValue) {
+    // 参数验证
+    if (!deviceId || !method || !rawValue) {
+      throw new Error('deviceId, method 和 rawValue 参数不能为空')
+    }
     try {
       const deviceInfo = {
         deviceId,
         method,
-        rawValue: rawValue.slice(0, 100), // 限制长度防止敏感信息泄露
+        rawValue: rawValue.slice(0, this.constants.maxRawValueLength), // 限制长度防止敏感信息泄露
         generatedAt: DateHelper.getCurrentDate(),
         hostname: os.hostname(),
         platform: os.platform(),
@@ -278,7 +297,7 @@ export default class DeviceIdGenerator {
       await fs.writeJson(this.deviceIdFile, deviceInfo, { spaces: 2 })
       console.log('💾 设备ID已保存到本地文件')
     } catch (error) {
-      console.warn('⚠️ 保存设备ID失败:', error.message)
+      ErrorLogger.logWarning('保存设备ID失败', error.message)
     }
   }
 
@@ -298,7 +317,7 @@ export default class DeviceIdGenerator {
 
       return null
     } catch (error) {
-      console.log('⚠️ 读取设备ID文件失败:', error.message)
+      ErrorLogger.logWarning('读取设备ID文件失败', error.message)
       return null
     }
   }
@@ -327,7 +346,7 @@ export default class DeviceIdGenerator {
         }))
       }
     } catch (error) {
-      console.warn('获取设备详细信息失败:', error)
+      ErrorLogger.logWarning('获取设备详细信息失败', error.message)
       return {}
     }
   }

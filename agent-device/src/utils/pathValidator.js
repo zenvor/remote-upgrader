@@ -1,12 +1,28 @@
 // 路径验证工具 - 防止路径注入攻击
 import path from 'node:path'
 import fs from 'fs-extra'
+import { ErrorLogger } from './common.js'
 
 /**
  * 路径安全验证器
  */
 export class PathValidator {
   constructor(allowedBasePaths = []) {
+    // 参数验证
+    if (!Array.isArray(allowedBasePaths)) {
+      throw new Error('allowedBasePaths 必须是数组')
+    }
+
+    // 常量配置
+    this.constants = {
+      maxPathLength: 260, // Windows路径长度限制
+      maxAllowedPaths: 20 // 允许的最大基础路径数量
+    }
+
+    // 限制允许路径数量，防止内存滥用
+    if (allowedBasePaths.length > this.constants.maxAllowedPaths) {
+      throw new Error(`允许路径数量不能超过 ${this.constants.maxAllowedPaths}`)
+    }
     // 允许的基础路径列表
     this.allowedBasePaths = allowedBasePaths.map((p) => path.resolve(p))
     // 危险路径模式
@@ -31,6 +47,10 @@ export class PathValidator {
    * @returns {{ valid: boolean, sanitizedPath?: string, reason?: string }}
    */
   validatePath(inputPath, operation = 'unknown') {
+    // 参数验证
+    if (operation && typeof operation !== 'string') {
+      throw new Error('operation 必须是字符串')
+    }
     try {
       // 1. 基础检查
       if (!inputPath || typeof inputPath !== 'string') {
@@ -46,7 +66,7 @@ export class PathValidator {
       // 3. 检查危险模式
       for (const pattern of this.dangerousPatterns) {
         if (pattern.test(trimmedPath)) {
-          console.warn(`⚠️ 路径安全检查失败 (${operation}): 检测到危险模式 ${pattern} in ${trimmedPath}`)
+          ErrorLogger.logWarning(`路径安全检查失败 (${operation})`, `检测到危险模式 ${pattern}`, { path: trimmedPath })
           return {
             valid: false,
             reason: `路径包含危险模式: ${pattern}`
@@ -64,7 +84,7 @@ export class PathValidator {
         })
 
         if (!isAllowed) {
-          console.warn(`⚠️ 路径安全检查失败 (${operation}): 路径不在允许范围内 ${resolvedPath}`)
+          ErrorLogger.logWarning(`路径安全检查失败 (${operation})`, `路径不在允许范围内`, { path: resolvedPath })
           return {
             valid: false,
             reason: `路径不在允许的基础路径范围内`
@@ -73,8 +93,8 @@ export class PathValidator {
       }
 
       // 6. 检查路径长度
-      if (resolvedPath.length > 260) {
-        // Windows路径长度限制
+      if (resolvedPath.length > this.constants.maxPathLength) {
+        // 路径长度限制
         return {
           valid: false,
           reason: '路径长度超过限制'
@@ -87,7 +107,7 @@ export class PathValidator {
         sanitizedPath: resolvedPath
       }
     } catch (error) {
-      console.error(`❌ 路径验证异常 (${operation}):`, error)
+      ErrorLogger.logError(`路径验证异常 (${operation})`, error, { inputPath })
       return {
         valid: false,
         reason: `路径验证异常: ${error.message}`
@@ -102,6 +122,10 @@ export class PathValidator {
    * @returns {{ valid: boolean, path: string, reason?: string }}
    */
   validateDeployPath(inputPath, defaultPath) {
+    // 参数验证
+    if (!defaultPath || typeof defaultPath !== 'string') {
+      throw new Error('defaultPath 不能为空且必须是字符串')
+    }
     // 如果没有输入路径，使用默认路径
     if (!inputPath) {
       const defaultValidation = this.validatePath(defaultPath, 'default-deploy')
@@ -129,7 +153,7 @@ export class PathValidator {
     }
 
     // 输入路径不安全，回退到默认路径
-    console.warn(`⚠️ 部署路径不安全，回退到默认路径: ${defaultPath}`)
+    ErrorLogger.logWarning('部署路径不安全，回退到默认路径', validation.reason, { inputPath, defaultPath })
     const defaultValidation = this.validatePath(defaultPath, 'fallback-deploy')
     return {
       valid: false, // 标记为验证失败，因为原始路径不安全
@@ -144,6 +168,10 @@ export class PathValidator {
    * @returns {Promise<{accessible: boolean, writable: boolean, reason?: string}>}
    */
   async checkPathAccessibility(targetPath) {
+    // 参数验证
+    if (!targetPath || typeof targetPath !== 'string') {
+      throw new Error('targetPath 不能为空且必须是字符串')
+    }
     try {
       // 确保路径存在
       await fs.ensureDir(targetPath)
@@ -168,15 +196,19 @@ export class PathValidator {
 /**
  * 创建默认的路径验证器实例
  */
-export function createDefaultPathValidator() {
+export function createDefaultPathValidator(customPaths = []) {
+  // 参数验证
+  if (!Array.isArray(customPaths)) {
+    throw new Error('customPaths 必须是数组')
+  }
+
   // 定义允许的基础路径
   const allowedPaths = [
     process.cwd(), // 当前工作目录
     '/tmp', // 临时目录（Linux/Mac）
     process.env.TMPDIR || '/tmp', // 系统临时目录
     '/var/tmp', // 持久临时目录
-    '/Users/claude/CompanyProjects', // 调试使用
-    '/opt/1panel/www/sites/t.vdirector.cn/index' // 云服务器部署目录
+    ...customPaths // 自定义路径（由配置文件指定）
   ]
 
   // Windows特殊处理
@@ -192,5 +224,6 @@ export function createDefaultPathValidator() {
   return new PathValidator(allowedPaths)
 }
 
-// 导出单例实例
-export const defaultPathValidator = createDefaultPathValidator()
+// 导出单例实例（可以通过环境变量配置自定义路径）
+const customAllowedPaths = process.env.ALLOWED_DEPLOY_PATHS ? process.env.ALLOWED_DEPLOY_PATHS.split(',') : []
+export const defaultPathValidator = createDefaultPathValidator(customAllowedPaths)

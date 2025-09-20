@@ -3,8 +3,26 @@ import { ErrorLogger, DateHelper } from '../utils/common.js'
 
 export default class SocketHandler {
   constructor(socket, agent) {
+    // 参数验证
+    if (!socket) {
+      throw new Error('Socket 参数不能为空')
+    }
+    if (!agent) {
+      throw new Error('Agent 参数不能为空')
+    }
+
     this.socket = socket
     this.agent = agent
+
+    // 常量配置
+    this.constants = {
+      heartbeatInterval: 30_000 // 30秒心跳间隔
+    }
+
+    // 状态管理
+    this.heartbeatInterval = null
+    this.systemInfo = null // 缓存系统信息模块
+
     this.setupEventListeners()
   }
 
@@ -117,7 +135,7 @@ export default class SocketHandler {
         }
       }
     } catch (error) {
-      console.error('命令处理失败:', error)
+      ErrorLogger.logError('命令处理失败', error, { command, messageId })
       if (messageId) {
         this.sendCommandResult(messageId, false, error.message)
       }
@@ -130,9 +148,18 @@ export default class SocketHandler {
     const commandId = messageId || data?.commandId || null
 
     try {
-      this.agent.reportStatus('upgrading')
+      // 参数验证
+      if (!data || typeof data !== 'object') {
+        throw new Error('升级命令参数无效')
+      }
 
       const { project, fileName, version, deployPath } = data
+
+      if (!project || !fileName) {
+        throw new Error('升级命令缺少必需参数: project, fileName')
+      }
+
+      this.agent.reportStatus('upgrading')
 
       // 1. 下载升级包
       console.log('开始下载升级包...')
@@ -173,13 +200,13 @@ export default class SocketHandler {
       const actualDeployPath = deployResult.deployPath || deployPath
       if (actualDeployPath) {
         this.agent.updateSystemInfoAfterRegistration(actualDeployPath).catch((error) => {
-          console.error('升级后更新系统信息失败:', error.message)
+          ErrorLogger.logError('升级后更新系统信息失败', error, { deployPath: actualDeployPath })
         })
       }
 
       console.log('升级完成')
     } catch (error) {
-      console.error('升级失败:', error)
+      ErrorLogger.logError('升级失败', error, { project: data.project, commandId })
       this.agent.reportStatus('upgrade_failed')
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
@@ -193,9 +220,18 @@ export default class SocketHandler {
     const commandId = messageId || data?.commandId || null
 
     try {
-      this.agent.reportStatus('rolling_back')
+      // 参数验证
+      if (!data || typeof data !== 'object') {
+        throw new Error('回滚命令参数无效')
+      }
 
       const { project } = data
+
+      if (!project) {
+        throw new Error('回滚命令缺少必需参数: project')
+      }
+
+      this.agent.reportStatus('rolling_back')
 
       // 执行回滚
       const rollbackResult = await this.agent.getDeployManager().rollback(project)
@@ -221,13 +257,13 @@ export default class SocketHandler {
 
       if (targetPath) {
         this.agent.updateSystemInfoAfterRegistration(targetPath).catch((error) => {
-          console.error('回滚后更新系统信息失败:', error.message)
+          ErrorLogger.logError('回滚后更新系统信息失败', error, { deployPath: targetPath })
         })
       }
 
       console.log('回滚完成')
     } catch (error) {
-      console.error('回滚失败:', error)
+      ErrorLogger.logError('回滚失败', error, { project: data.project, commandId })
       this.agent.reportStatus('rollback_failed')
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
@@ -241,10 +277,9 @@ export default class SocketHandler {
     const commandId = messageId || data?.commandId || null
 
     try {
-      const si = await import('systeminformation')
-      const systemUptime = Math.floor((await si.default.time()).uptime)
-
+      const systemUptime = await this.getSystemUptime()
       const deployManager = this.agent.getDeployManager()
+
       const status = {
         deviceId: this.agent.config.device.id,
         timestamp: DateHelper.getCurrentDate(),
@@ -263,7 +298,7 @@ export default class SocketHandler {
         this.sendCommandResult(commandId, true, '状态查询成功', status)
       }
     } catch (error) {
-      console.error('状态查询失败:', error)
+      ErrorLogger.logError('状态查询失败', error, { commandId })
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
       }
@@ -283,22 +318,50 @@ export default class SocketHandler {
   }
 
   startHeartbeat() {
+    // 清理旧的心跳定时器
+    this.stopHeartbeat()
+
     // 每30秒发送一次心跳
     this.heartbeatInterval = setInterval(async () => {
       if (this.socket.connected) {
-        // 获取系统运行时间
-        const si = await import('systeminformation')
-        const systemUptime = Math.floor((await si.default.time()).uptime)
+        try {
+          const systemUptime = await this.getSystemUptime()
 
-        this.socket.emit('device:heartbeat', {
-          deviceId: this.agent.config.device.id,
-          timestamp: Date.now(),
-          health: {
-            uptimeSeconds: systemUptime
-          }
-        })
+          this.socket.emit('device:heartbeat', {
+            deviceId: this.agent.config.device.id,
+            timestamp: Date.now(),
+            health: {
+              uptimeSeconds: systemUptime
+            }
+          })
+        } catch (error) {
+          ErrorLogger.logError('心跳发送失败', error)
+        }
       }
-    }, 30_000)
+    }, this.constants.heartbeatInterval)
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+      this.heartbeatInterval = null
+    }
+  }
+
+  async getSystemUptime() {
+    try {
+      // 懒加载并缓存系统信息模块
+      if (!this.systemInfo) {
+        this.systemInfo = await import('systeminformation')
+      }
+
+      const timeInfo = await this.systemInfo.default.time()
+      return Math.floor(timeInfo.uptime)
+    } catch (error) {
+      ErrorLogger.logError('获取系统运行时间失败', error)
+      // 返回进程运行时间作为fallback
+      return Math.floor(process.uptime())
+    }
   }
 
   sendCommandResult(commandId, success, message, data = null) {
@@ -348,7 +411,7 @@ export default class SocketHandler {
         this.sendCommandResult(commandId, true, '获取当前版本成功', versionInfo)
       }
     } catch (error) {
-      console.error('❌ 获取当前版本失败:', error)
+      ErrorLogger.logError('获取当前版本失败', error, { project: parameters.project, commandId })
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
       }
@@ -367,13 +430,17 @@ export default class SocketHandler {
         console.warn('无法发送通知：Socket 未连接')
       }
     } catch (error) {
-      console.error('发送通知失败:', error)
+      ErrorLogger.logError('发送通知失败', error, { eventName })
     }
   }
 
   cleanup() {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval)
-    }
+    // 停止心跳
+    this.stopHeartbeat()
+
+    // 清理缓存的模块引用
+    this.systemInfo = null
+
+    console.log('✅ SocketHandler 清理完成')
   }
 }

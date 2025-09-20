@@ -1,5 +1,6 @@
 // 通用工具函数 - 提取重复代码模式 (Agent端)
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import fs from 'fs-extra'
 
 /**
@@ -13,6 +14,16 @@ export const ErrorLogger = {
    * @param {Object} context - 上下文信息 (如 deviceId, filePath 等)
    */
   logError(operation, error, context = {}) {
+    // 参数验证
+    if (!operation || typeof operation !== 'string') {
+      throw new Error('operation 参数不能为空且必须是字符串')
+    }
+    if (!error) {
+      throw new Error('error 参数不能为空')
+    }
+    if (context && typeof context !== 'object') {
+      throw new Error('context 必须是对象')
+    }
     const contextString =
       Object.keys(context).length > 0
         ? ` [${Object.entries(context)
@@ -30,6 +41,13 @@ export const ErrorLogger = {
    * @param {Object} context - 上下文信息
    */
   logWarning(operation, message, context = {}) {
+    // 参数验证
+    if (!operation || typeof operation !== 'string') {
+      throw new Error('operation 参数不能为空且必须是字符串')
+    }
+    if (!message || typeof message !== 'string') {
+      throw new Error('message 参数不能为空且必须是字符串')
+    }
     const contextString =
       Object.keys(context).length > 0
         ? ` [${Object.entries(context)
@@ -46,6 +64,10 @@ export const ErrorLogger = {
    * @param {Object} context - 上下文信息
    */
   logSuccess(operation, context = {}) {
+    // 参数验证
+    if (!operation || typeof operation !== 'string') {
+      throw new Error('operation 参数不能为空且必须是字符串')
+    }
     const contextString =
       Object.keys(context).length > 0
         ? ` [${Object.entries(context)
@@ -67,6 +89,10 @@ export const FileHelper = {
    * @returns {Promise<boolean>}
    */
   async safePathExists(filePath) {
+    // 参数验证
+    if (!filePath || typeof filePath !== 'string') {
+      throw new Error('filePath 参数不能为空且必须是字符串')
+    }
     try {
       return await fs.pathExists(filePath)
     } catch (error) {
@@ -82,6 +108,10 @@ export const FileHelper = {
    * @returns {Promise<*>}
    */
   async safeReadJson(filePath, defaultValue = {}) {
+    // 参数验证
+    if (!filePath || typeof filePath !== 'string') {
+      throw new Error('filePath 参数不能为空且必须是字符串')
+    }
     try {
       if (await this.safePathExists(filePath)) {
         return await fs.readJson(filePath)
@@ -102,6 +132,13 @@ export const FileHelper = {
    * @returns {Promise<boolean>} 写入是否成功
    */
   async safeWriteJson(filePath, data, options = { spaces: 2 }) {
+    // 参数验证
+    if (!filePath || typeof filePath !== 'string') {
+      throw new Error('filePath 参数不能为空且必须是字符串')
+    }
+    if (data === undefined || data === null) {
+      throw new Error('data 参数不能为空')
+    }
     try {
       await fs.ensureDir(path.dirname(filePath))
       await fs.writeJson(filePath, data, options)
@@ -118,6 +155,10 @@ export const FileHelper = {
    * @returns {Promise<boolean>}
    */
   async safeEnsureDir(dirPath) {
+    // 参数验证
+    if (!dirPath || typeof dirPath !== 'string') {
+      throw new Error('dirPath 参数不能为空且必须是字符串')
+    }
     try {
       await fs.ensureDir(dirPath)
       return true
@@ -135,6 +176,13 @@ export const FileHelper = {
    * @returns {Promise<boolean>}
    */
   async safeCopy(src, dest, options = { overwrite: true }) {
+    // 参数验证
+    if (!src || typeof src !== 'string') {
+      throw new Error('src 参数不能为空且必须是字符串')
+    }
+    if (!dest || typeof dest !== 'string') {
+      throw new Error('dest 参数不能为空且必须是字符串')
+    }
     try {
       await fs.copy(src, dest, options)
       return true
@@ -189,13 +237,31 @@ export const CommandHelper = {
    * @returns {Promise<Object>}
    */
   execCommand(command, args, options = {}) {
-    return new Promise((resolve, reject) => {
-      const { spawn } = require('node:child_process')
+    // 参数验证
+    if (!command || typeof command !== 'string') {
+      throw new Error('command 参数不能为空且必须是字符串')
+    }
+    if (!Array.isArray(args)) {
+      throw new Error('args 必须是数组')
+    }
 
+    // 常量配置
+    const constants = {
+      defaultTimeout: 60_000 // 60秒默认超时
+    }
+    return new Promise((resolve, reject) => {
       const process = spawn(command, args, {
         stdio: 'pipe',
+        timeout: constants.defaultTimeout,
         ...options
       })
+
+      // 超时处理
+      const timeout = options.timeout || constants.defaultTimeout
+      const timeoutId = setTimeout(() => {
+        process.kill('SIGTERM')
+        reject(new Error(`命令执行超时: ${command}`))
+      }, timeout)
 
       let stdout = ''
       let stderr = ''
@@ -209,6 +275,7 @@ export const CommandHelper = {
       })
 
       process.on('close', (code) => {
+        clearTimeout(timeoutId)
         if (code === 0) {
           resolve(DeployResult.success(`${command} 执行完成`, { stdout, stderr }))
         } else {
@@ -217,6 +284,7 @@ export const CommandHelper = {
       })
 
       process.on('error', (error) => {
+        clearTimeout(timeoutId)
         reject(error)
       })
     })
@@ -262,6 +330,19 @@ export const VersionHelper = {
    * @returns {Object}
    */
   createVersionInfo(project, version, packagePath, deviceId) {
+    // 参数验证
+    if (!project || typeof project !== 'string') {
+      throw new Error('project 参数不能为空且必须是字符串')
+    }
+    if (!version || typeof version !== 'string') {
+      throw new Error('version 参数不能为空且必须是字符串')
+    }
+    if (!packagePath || typeof packagePath !== 'string') {
+      throw new Error('packagePath 参数不能为空且必须是字符串')
+    }
+    if (!deviceId || typeof deviceId !== 'string') {
+      throw new Error('deviceId 参数不能为空且必须是字符串')
+    }
     return {
       project,
       version,
@@ -278,6 +359,13 @@ export const VersionHelper = {
    * @returns {Promise<Object>}
    */
   async getVersionInfo(targetDir, project) {
+    // 参数验证
+    if (!targetDir || typeof targetDir !== 'string') {
+      throw new Error('targetDir 参数不能为空且必须是字符串')
+    }
+    if (!project || typeof project !== 'string') {
+      throw new Error('project 参数不能为空且必须是字符串')
+    }
     try {
       const versionFile = path.join(targetDir, 'version.json')
 
@@ -313,6 +401,16 @@ export const BackupHelper = {
    * @returns {Object}
    */
   createBackupInfo(project, version, backupPath, sourceDir) {
+    // 参数验证
+    if (!project || typeof project !== 'string') {
+      throw new Error('project 参数不能为空且必须是字符串')
+    }
+    if (!backupPath || typeof backupPath !== 'string') {
+      throw new Error('backupPath 参数不能为空且必须是字符串')
+    }
+    if (!sourceDir || typeof sourceDir !== 'string') {
+      throw new Error('sourceDir 参数不能为空且必须是字符串')
+    }
     return {
       project,
       version,
@@ -328,6 +426,10 @@ export const BackupHelper = {
    * @returns {Object}
    */
   parseBackupName(backupName) {
+    // 参数验证
+    if (!backupName || typeof backupName !== 'string') {
+      throw new Error('backupName 参数不能为空且必须是字符串')
+    }
     const parts = backupName.split('-')
     if (parts.length < 3) {
       return { project: '', timestamp: 0, version: '' }

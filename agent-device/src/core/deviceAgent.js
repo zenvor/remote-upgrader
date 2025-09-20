@@ -12,7 +12,21 @@ import SocketHandler from './socketHandler.js'
 
 export default class DeviceAgent {
   constructor(config) {
+    // 验证必需的配置
+    this.validateConfig(config)
+
     this.config = config // 配置
+
+    // 常量配置
+    this.constants = {
+      maxReconnectDelay: 300_000, // 5分钟
+      jitterRange: 1000, // 重连抖动范围 1秒
+      wifiTimeout: 3000, // WiFi信息获取超时
+      publicIpTimeout: 5000, // 公网IP获取超时
+      statusSendDelay: 100, // 状态发送延迟
+      networkUpdateTimeout: 30_000 // 网络信息更新超时
+    }
+
     this.socket = null // Socket
     this.socketHandler = null // Socket 处理器
     this.downloadManager = null // 下载管理器
@@ -21,8 +35,63 @@ export default class DeviceAgent {
     this.isRegistered = false // 是否注册
     this.reconnectAttempts = 0 // 重连次数
     this.baseReconnectDelay = config.server.reconnectDelay // 基础重连延迟
-    this.maxReconnectDelay = 300_000 // 最大延迟 5 分钟
+    this.maxReconnectDelay = this.constants.maxReconnectDelay
     this.reconnectTimer = null // 重连定时器
+
+    // 并发控制
+    this.registerPromise = null // 注册操作的Promise
+    this.networkUpdatePromise = null // 网络信息更新的Promise
+
+    // 公网IP服务配置
+    this.publicIpServices = [
+      'https://api.ipify.org/?format=text',
+      'https://ipinfo.io/ip',
+      'https://api.myip.com',
+      'https://httpbin.org/ip',
+      'https://icanhazip.com'
+    ]
+  }
+
+  validateConfig(config) {
+    if (!config) {
+      throw new Error('配置对象不能为空')
+    }
+
+    const requiredFields = [
+      'server.url',
+      'server.timeout',
+      'server.reconnectDelay',
+      'server.maxReconnectAttempts',
+      'download.tempDir',
+      'download.packageDir',
+      'deploy.frontendDir',
+      'deploy.backendDir',
+      'deploy.backupDir',
+      'log.file'
+    ]
+
+    for (const field of requiredFields) {
+      const value = this.getNestedValue(config, field)
+      if (value === undefined || value === null) {
+        throw new Error(`配置缺少必需字段: ${field}`)
+      }
+    }
+
+    // 验证服务器URL格式
+    try {
+      new URL(config.server.url)
+    } catch {
+      throw new Error('服务器URL格式无效')
+    }
+
+    // 验证数值类型
+    if (typeof config.server.timeout !== 'number' || config.server.timeout <= 0) {
+      throw new Error('服务器超时时间必须是正数')
+    }
+  }
+
+  getNestedValue(obj, path) {
+    return path.split('.').reduce((current, key) => current?.[key], obj)
   }
 
   async start() {
@@ -82,25 +151,25 @@ export default class DeviceAgent {
     this.socket.on('connect', () => this.onConnected())
     this.socket.on('disconnect', () => this.onDisconnected())
     this.socket.on('connect_error', (error) => this.handleConnectionError(error))
-    this.socket.on('reconnect', () => this.onReconnected())
+    // 注意：Socket.IO 客户端没有 'reconnect' 事件，重连通过 'connect' 事件处理
   }
 
   onConnected() {
-    console.log('✅ 成功连接到升级服务器')
-    this.isConnected = true
-    this.reconnectAttempts = 0 // 重置重连计数
-    this.clearReconnectTimer() // 清除重连定时器
+    const isReconnection = this.reconnectAttempts > 0
+    console.log(isReconnection ? '🔄 已重新连接到服务器' : '✅ 成功连接到升级服务器')
 
-    // 注册设备（避免重复注册）
-    if (!this.isRegistered) {
-      this.registerDevice()
-    }
+    this.isConnected = true
+    this.clearReconnectTimer() // 清除重连定时器
+    this.reconnectAttempts = 0 // 重置重连计数（在清除定时器后）
+
+    // 连接后都需要注册（初次连接或重连）
+    this.registerDevice()
   }
 
   onDisconnected() {
     console.log('🔌 与服务器连接断开')
     this.isConnected = false
-    this.isRegistered = false // 重置注册状态
+    this.isRegistered = false // 断开连接时重置注册状态
 
     // 开始指数退避重连
     this.scheduleReconnect()
@@ -115,11 +184,6 @@ export default class DeviceAgent {
     this.scheduleReconnect()
   }
 
-  onReconnected() {
-    console.log('🔄 已重新连接到服务器')
-    // 重连后需要重新注册
-    this.registerDevice()
-  }
 
   scheduleReconnect() {
     // 如果已经有重连定时器，不要重复设置
@@ -136,7 +200,7 @@ export default class DeviceAgent {
 
     // 指数退避算法：delay = baseDelay * (2 ^ attempts) + 随机抖动
     const exponentialDelay = this.baseReconnectDelay * 2 ** this.reconnectAttempts
-    const jitter = Math.random() * 1000 // 添加 0-1000ms 的随机抖动
+    const jitter = Math.random() * this.constants.jitterRange
     const finalDelay = Math.min(exponentialDelay + jitter, this.maxReconnectDelay)
 
     this.reconnectAttempts++
@@ -150,9 +214,15 @@ export default class DeviceAgent {
   }
 
   async attemptReconnect() {
-    if (!this.isConnected) {
+    if (!this.isConnected && this.socket) {
       console.log(`🔄 正在重连...`)
-      this.socket.connect()
+      try {
+        this.socket.connect()
+      } catch (error) {
+        console.error('❌ 重连尝试失败:', error.message)
+        // 继续重连调度
+        this.scheduleReconnect()
+      }
     }
   }
 
@@ -176,6 +246,21 @@ export default class DeviceAgent {
   }
 
   async registerDevice() {
+    // 避免并发注册
+    if (this.registerPromise) {
+      console.log('⏳ 注册操作已在进行中，等待完成...')
+      return this.registerPromise
+    }
+
+    this.registerPromise = this._doRegisterDevice()
+    try {
+      await this.registerPromise
+    } finally {
+      this.registerPromise = null
+    }
+  }
+
+  async _doRegisterDevice() {
     try {
       // 动态获取系统主机名作为设备名称
       const systemHostname = await this.getSystemHostname()
@@ -207,15 +292,15 @@ export default class DeviceAgent {
         timestamp: DateHelper.getCurrentDate()
       }
 
-      console.log('注册设备信息:', basicDeviceInfo.deviceId, `(${basicDeviceInfo.deviceName}) 获取网络信息中...`)
+      console.log('📝 注册设备信息:', basicDeviceInfo.deviceId, `(${basicDeviceInfo.deviceName}) 获取网络信息中...`)
       this.socket.emit('device:register', basicDeviceInfo)
       this.isRegistered = true
 
       // 异步获取网络信息并更新
       this.updateNetworkInfo()
     } catch (error) {
-      console.error('❌ 设备注册失败:', error)
-      this.isRegistered = true
+      console.error('❌ 设备注册失败:', error.message)
+      this.isRegistered = false
     }
   }
 
@@ -235,40 +320,78 @@ export default class DeviceAgent {
   }
 
   async updateNetworkInfo() {
+    // 避免并发更新网络信息
+    if (this.networkUpdatePromise) {
+      console.log('⏳ 网络信息更新已在进行中，跳过此次更新')
+      return this.networkUpdatePromise
+    }
+
+    this.networkUpdatePromise = this._doUpdateNetworkInfo()
     try {
-      // 并行获取WiFi、公网IP、本地地址和MAC
-      const [wifiInfo, publicIp, localIp, macAddresses] = await Promise.all([
+      await this.networkUpdatePromise
+    } finally {
+      this.networkUpdatePromise = null
+    }
+  }
+
+  async _doUpdateNetworkInfo() {
+    try {
+      // 并行获取WiFi、公网IP、本地地址和MAC（带超时保护）
+      const networkInfoPromise = Promise.all([
         this.getWifiInfo(),
         this.getPublicIp(),
         this.getLocalIp(),
         this.getMacAddresses()
       ])
 
-      if (this.socket && this.socket.connected) {
-        // 按分组字段发送网络信息，适配 server-koa 期望的结构
-        const networkUpdate = {
-          deviceId: this.config.device.id,
-          network: {
-            wifiName: wifiInfo?.ssid || null,
-            wifiSignal: wifiInfo?.signal || null,
-            publicIp,
-            localIp,
-            macAddresses
-          },
-          timestamp: DateHelper.getCurrentDate()
+      let timeoutId = null
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Network info update timeout')), this.constants.networkUpdateTimeout)
+      })
+
+      try {
+        const [wifiInfo, publicIp, localIp, macAddresses] = await Promise.race([
+          networkInfoPromise,
+          timeoutPromise
+        ])
+
+        // 清理超时定时器
+        if (timeoutId) {
+          clearTimeout(timeoutId)
         }
 
-        console.log('🌐 更新网络信息:', {
-          wifi: wifiInfo?.ssid || '无WiFi连接',
-          publicIp: publicIp || '获取失败',
-          localIp: localIp || '未知',
-          macCount: Array.isArray(macAddresses) ? macAddresses.length : 0
-        })
+        if (this.socket && this.socket.connected) {
+          // 按分组字段发送网络信息，适配 server-koa 期望的结构
+          const networkUpdate = {
+            deviceId: this.config.device.id,
+            network: {
+              wifiName: wifiInfo?.ssid || null,
+              wifiSignal: wifiInfo?.signal || null,
+              publicIp,
+              localIp,
+              macAddresses
+            },
+            timestamp: DateHelper.getCurrentDate()
+          }
 
-        this.socket.emit('device:update-network', networkUpdate)
+          console.log('🌐 更新网络信息:', {
+            wifi: wifiInfo?.ssid || '无WiFi连接',
+            publicIp: publicIp || '获取失败',
+            localIp: localIp || '未知',
+            macCount: Array.isArray(macAddresses) ? macAddresses.length : 0
+          })
+
+          this.socket.emit('device:update-network', networkUpdate)
+        }
+      } catch (networkError) {
+        // 清理超时定时器（如果获取网络信息失败）
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+        }
+        throw networkError
       }
     } catch (error) {
-      console.log('⚠️ 更新网络信息失败:', error.message)
+      console.error('⚠️ 更新网络信息失败:', error.message)
     }
   }
 
@@ -285,7 +408,7 @@ export default class DeviceAgent {
         })
       }
     } catch (error) {
-      console.log('⚠️ 更新WiFi信息失败:', error.message)
+      console.error('⚠️ 更新WiFi信息失败:', error.message)
     }
   }
 
@@ -294,117 +417,143 @@ export default class DeviceAgent {
    */
   async getSystemHostname() {
     try {
-      let baseHostname = null
-
-      // 方法1：使用 systeminformation 获取操作系统信息
-      const osInfo = await si.osInfo()
-      if (osInfo.hostname && osInfo.hostname.trim()) {
-        baseHostname = osInfo.hostname.trim()
-
-        // 如果主机名包含 .local 后缀，去掉它（macOS常见）
-        if (baseHostname.endsWith('.local')) {
-          baseHostname = baseHostname.replace('.local', '')
-        }
-
-        console.log('🖥️  从系统信息获取主机名:', baseHostname)
-      }
-
-      // 方法2：使用 Node.js os 模块获取主机名
+      const baseHostname = await this.getBaseHostname()
       if (!baseHostname) {
-        const hostname = os.hostname()
-        if (hostname && hostname.trim()) {
-          baseHostname = hostname.trim()
-          if (baseHostname.endsWith('.local')) {
-            baseHostname = baseHostname.replace('.local', '')
-          }
-
-          console.log('🖥️  从OS模块获取主机名:', baseHostname)
-        }
+        console.log('⚠️ 无法获取系统主机名，将使用配置文件中的默认名称')
+        return null
       }
 
-      // 方法3：从环境变量获取（Windows COMPUTERNAME, Unix HOSTNAME）
-      if (!baseHostname) {
-        const envHostname = process.env.COMPUTERNAME || process.env.HOSTNAME
-        if (envHostname && envHostname.trim()) {
-          baseHostname = envHostname.trim()
-          console.log('🖥️  从环境变量获取主机名:', baseHostname)
-        }
-      }
-
-      // 方法4：尝试获取用户信息作为备选
-      if (!baseHostname) {
-        const userInfo = os.userInfo()
-        if (userInfo.username) {
-          baseHostname = `${userInfo.username}的设备`
-          console.log('🖥️  使用用户名作为设备名:', baseHostname)
-        }
-      }
-
-      // 为支持多实例，添加实例标识符
-      if (baseHostname) {
-        const instanceId = process.env.AGENT_INSTANCE_ID
-        if (instanceId) {
-          const deviceName = `${baseHostname}-${instanceId}`
-          console.log('🖥️  多实例设备名:', deviceName)
-          return deviceName
-        }
-
-        // 如果没有实例ID，使用进程ID作为区分
-        const deviceName = `${baseHostname}-${process.pid}`
-        console.log('🖥️  使用进程ID区分的设备名:', deviceName)
-        return deviceName
-      }
-
-      console.log('⚠️ 无法获取系统主机名，将使用配置文件中的默认名称')
-      return null
+      return this.generateDeviceName(baseHostname)
     } catch (error) {
-      console.log('⚠️ 获取系统主机名失败:', error.message)
+      console.error('⚠️ 获取系统主机名失败:', error.message)
       return null
     }
+  }
+
+  /**
+   * 获取基础主机名
+   */
+  async getBaseHostname() {
+    // 方法1：从系统信息获取
+    const systemHostname = await this.getHostnameFromSystem()
+    if (systemHostname) return systemHostname
+
+    // 方法2：从OS模块获取
+    const osHostname = this.getHostnameFromOS()
+    if (osHostname) return osHostname
+
+    // 方法3：从环境变量获取
+    const envHostname = this.getHostnameFromEnv()
+    if (envHostname) return envHostname
+
+    // 方法4：从用户信息获取
+    const userHostname = this.getHostnameFromUser()
+    if (userHostname) return userHostname
+
+    return null
+  }
+
+  async getHostnameFromSystem() {
+    try {
+      const osInfo = await si.osInfo()
+      if (osInfo.hostname && osInfo.hostname.trim()) {
+        const hostname = this.cleanHostname(osInfo.hostname.trim())
+        console.log('🖥️  从系统信息获取主机名:', hostname)
+        return hostname
+      }
+    } catch {
+      // 忽略错误，尝试下一种方法
+    }
+    return null
+  }
+
+  getHostnameFromOS() {
+    try {
+      const hostname = os.hostname()
+      if (hostname && hostname.trim()) {
+        const cleanedHostname = this.cleanHostname(hostname.trim())
+        console.log('🖥️  从OS模块获取主机名:', cleanedHostname)
+        return cleanedHostname
+      }
+    } catch {
+      // 忽略错误，尝试下一种方法
+    }
+    return null
+  }
+
+  getHostnameFromEnv() {
+    const envHostname = process.env.COMPUTERNAME || process.env.HOSTNAME
+    if (envHostname && envHostname.trim()) {
+      const hostname = envHostname.trim()
+      console.log('🖥️  从环境变量获取主机名:', hostname)
+      return hostname
+    }
+    return null
+  }
+
+  getHostnameFromUser() {
+    try {
+      const userInfo = os.userInfo()
+      if (userInfo.username) {
+        const hostname = `${userInfo.username}的设备`
+        console.log('🖥️  使用用户名作为设备名:', hostname)
+        return hostname
+      }
+    } catch {
+      // 忽略错误
+    }
+    return null
+  }
+
+  cleanHostname(hostname) {
+    // 去掉 .local 后缀（macOS常见）
+    return hostname.endsWith('.local') ? hostname.replace('.local', '') : hostname
+  }
+
+  generateDeviceName(baseHostname) {
+    // 优先使用环境变量中的实例ID
+    const instanceId = process.env.AGENT_INSTANCE_ID
+    if (instanceId) {
+      const deviceName = `${baseHostname}-${instanceId}`
+      console.log('🖥️  多实例设备名:', deviceName)
+      return deviceName
+    }
+
+    // 使用进程ID作为区分
+    const deviceName = `${baseHostname}-${process.pid}`
+    console.log('🖥️  使用进程ID区分的设备名:', deviceName)
+    return deviceName
   }
 
   /**
    * 获取公网IP地址
    */
   async getPublicIp() {
-    const services = [
-      'https://api.ipify.org/?format=text',
-      'https://ipinfo.io/ip',
-      'https://api.myip.com',
-      'https://httpbin.org/ip',
-      'https://icanhazip.com'
-    ]
-
-    for (const serviceUrl of services) {
+    for (const serviceUrl of this.publicIpServices) {
+      let timeoutId = null
       try {
         console.log(`🌍 尝试从 ${serviceUrl} 获取公网IP...`)
 
+        const controller = new AbortController()
+        timeoutId = setTimeout(() => controller.abort(), this.constants.publicIpTimeout)
+
         const response = await fetch(serviceUrl, {
           method: 'GET',
-          timeout: 5000, // 5秒超时
+          signal: controller.signal,
           headers: {
             'User-Agent': 'RemoteUpgrader-Device/1.0'
           }
         })
+
+        clearTimeout(timeoutId)
+        timeoutId = null
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
         }
 
         const text = await response.text()
-        let ip = null
-
-        // 处理不同服务的响应格式
-        if (serviceUrl.includes('myip.com')) {
-          const data = JSON.parse(text)
-          ip = data.ip
-        } else if (serviceUrl.includes('httpbin.org')) {
-          const data = JSON.parse(text)
-          ip = data.origin
-        } else {
-          // Ipify.org, ipinfo.io, icanhazip.com 直接返回IP
-          ip = text.trim()
-        }
+        const ip = this.parseIpResponse(serviceUrl, text)
 
         // 验证IP格式
         if (this.isValidIp(ip)) {
@@ -412,13 +561,38 @@ export default class DeviceAgent {
           return ip
         }
       } catch (error) {
-        console.log(`⚠️ 从 ${serviceUrl} 获取公网IP失败:`, error.message)
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+        }
+        console.error(`⚠️ 从 ${serviceUrl} 获取公网IP失败:`, error.message)
         continue
       }
     }
 
     console.log('❌ 所有公网IP服务都无法访问')
     return null
+  }
+
+  /**
+   * 解析不同服务的IP响应格式
+   */
+  parseIpResponse(serviceUrl, text) {
+    try {
+      // 处理不同服务的响应格式
+      if (serviceUrl.includes('myip.com')) {
+        const data = JSON.parse(text)
+        return data.ip
+      } else if (serviceUrl.includes('httpbin.org')) {
+        const data = JSON.parse(text)
+        return data.origin
+      } else {
+        // Ipify.org, ipinfo.io, icanhazip.com 直接返回IP
+        return text.trim()
+      }
+    } catch (error) {
+      console.error(`⚠️ 解析IP响应失败: ${serviceUrl}`, error.message)
+      return null
+    }
   }
 
   /**
@@ -441,10 +615,10 @@ export default class DeviceAgent {
    */
   async getWifiInfo() {
     try {
-      // 设置超时：最多等待3秒获取WiFi信息
+      // 设置超时：最多等待配置的时间获取WiFi信息
       const wifiPromise = si.wifiConnections()
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('WiFi info timeout')), 3000)
+        setTimeout(() => reject(new Error('WiFi info timeout')), this.constants.wifiTimeout)
       })
 
       const wifiConnections = await Promise.race([wifiPromise, timeoutPromise])
@@ -468,7 +642,7 @@ export default class DeviceAgent {
         type: null
       }
     } catch (error) {
-      console.log('⚠️ 获取WiFi信息失败:', error.message)
+      console.error('⚠️ 获取WiFi信息失败:', error.message)
       return {
         ssid: null,
         signal: null,
@@ -519,6 +693,11 @@ export default class DeviceAgent {
 
   // 在拿到 deployPath 后，计算 storage 与回滚能力并上报
   async updateSystemInfoAfterRegistration(deployPath) {
+    if (!deployPath || typeof deployPath !== 'string') {
+      console.error('❌ 更新系统信息: 部署路径参数无效')
+      return
+    }
+
     try {
       console.log('🔧 开始更新系统信息，使用部署路径:', deployPath)
 
@@ -570,25 +749,35 @@ export default class DeviceAgent {
   }
 
   async getDiskInfoByPath(targetPath) {
+    if (!targetPath || typeof targetPath !== 'string') {
+      console.error('❌ 获取磁盘信息: 路径参数无效')
+      return null
+    }
+
     try {
-      if (!targetPath) return null
       const fsSize = await si.fsSize()
       // 简单匹配：找到包含路径的分区
       const match = fsSize.find((v) => targetPath.startsWith(v.mount))
       return match ? { free: match.available, total: match.size, mount: match.mount } : null
-    } catch {
+    } catch (error) {
+      console.error('⚠️ 获取磁盘信息失败:', error.message)
       return null
     }
   }
 
   async checkWritable(targetPath) {
+    if (!targetPath || typeof targetPath !== 'string') {
+      console.error('❌ 检查写权限: 路径参数无效')
+      return null
+    }
+
     try {
-      if (!targetPath) return null
       const testFile = path.join(targetPath, `.rwtest-${Date.now()}`)
-      await fs.outputFile(testFile, 'rw')
+      await fs.outputFile(testFile, 'test')
       await fs.remove(testFile)
       return true
-    } catch {
+    } catch (error) {
+      console.error(`⚠️ 检查目录写权限失败: ${targetPath}`, error.message)
       return false
     }
   }
@@ -601,7 +790,8 @@ export default class DeviceAgent {
       if (!exists) return false
       const files = await fs.readdir(backupDir)
       return files && files.length > 0
-    } catch {
+    } catch (error) {
+      console.error('⚠️ 检查回滚可用性失败:', error.message)
       return null
     }
   }
@@ -644,7 +834,7 @@ export default class DeviceAgent {
       console.log('⚠️ 使用fallback设备ID:', fallbackId)
     }
   }
-
+  // 确保必要目录存在
   async ensureDirectories() {
     const dirs = [
       this.config.download.tempDir,
@@ -655,11 +845,15 @@ export default class DeviceAgent {
       path.dirname(this.config.log.file)
     ]
 
-    for (const dir of dirs) {
-      await fs.ensureDir(dir)
+    try {
+      for (const dir of dirs) {
+        await fs.ensureDir(dir)
+      }
+      console.log('✅ 目录结构初始化完成')
+    } catch (error) {
+      console.error('❌ 目录创建失败:', error)
+      throw error
     }
-
-    console.log('🔧 检查配置文件...')
   }
 
   // 获取下载管理器
@@ -674,20 +868,88 @@ export default class DeviceAgent {
 
   // 发送设备状态
   reportStatus(status) {
-    if (this.isConnected) {
-      this.socket.emit('device:status', {
-        deviceId: this.config.device.id,
-        status,
-        timestamp: DateHelper.getCurrentDate()
-      })
+    if (!status || typeof status !== 'string') {
+      console.error('❌ 设备状态参数无效')
+      return
+    }
+
+    try {
+      if (this.isConnected && this.socket) {
+        this.socket.emit('device:status', {
+          deviceId: this.config.device.id,
+          status,
+          timestamp: DateHelper.getCurrentDate()
+        })
+      } else {
+        console.log('⚠️ Socket未连接，无法发送设备状态')
+      }
+    } catch (error) {
+      console.error('❌ 发送设备状态失败:', error.message)
     }
   }
 
   // 断开连接
   disconnect() {
+    try {
+      console.log('🔌 正在断开连接...')
+      this.cleanup()
+      console.log('✅ 连接已断开')
+    } catch (error) {
+      console.error('❌ 断开连接时发生错误:', error.message)
+    }
+  }
+
+  // 统一资源清理
+  cleanup() {
+    // 清理定时器
     this.clearReconnectTimer()
+
+    // 清理 Socket 连接
     if (this.socket) {
-      this.socket.disconnect()
+      try {
+        this.socket.removeAllListeners()
+        this.socket.disconnect()
+      } catch (error) {
+        console.error('⚠️ 清理Socket时发生错误:', error.message)
+      }
+      this.socket = null
+    }
+
+    // 清理状态
+    this.isConnected = false
+    this.isRegistered = false
+    this.reconnectAttempts = 0
+
+    // 清理处理器
+    if (this.socketHandler) {
+      this.socketHandler = null
+    }
+
+    // 清理并发控制的Promise引用
+    this.registerPromise = null
+    this.networkUpdatePromise = null
+  }
+
+  // 优雅关闭
+  async gracefulShutdown() {
+    try {
+      console.log('🔄 开始优雅关闭...')
+
+      // 发送离线状态
+      if (this.isConnected) {
+        this.reportStatus('offline')
+        // 等待状态发送完成
+        await new Promise((resolve) => setTimeout(resolve, this.constants.statusSendDelay))
+      }
+
+      // 清理所有资源
+      this.cleanup()
+
+      console.log('✅ 优雅关闭完成')
+    } catch (error) {
+      console.error('❌ 优雅关闭时发生错误:', error.message)
+      // 强制清理
+      this.cleanup()
     }
   }
 }

@@ -3,18 +3,58 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import axios from 'axios'
 import fs from 'fs-extra'
+import { ErrorLogger } from '../utils/common.js'
 
 export default class DownloadManager {
   constructor(config) {
+    // 参数验证
+    if (!config) {
+      throw new Error('配置参数不能为空')
+    }
+
     this.config = config
     this.serverUrl = config.server.url
     this.tempDir = config.download.tempDir
     this.packageDir = config.download.packageDir
     this.maxRetries = config.download.maxRetries
     this.retryDelay = config.download.retryDelay
+
+    // 常量配置
+    this.constants = {
+      tempFileMaxAge: 24 * 60 * 60 * 1000, // 24小时
+      downloadTimeout: 30_000, // 30秒下载超时
+      progressUpdateInterval: 1000 // 进度更新间隔1秒
+    }
+
+    // 验证必需的配置
+    this.validateConfig()
+  }
+
+  validateConfig() {
+    const requiredFields = [
+      'server.url',
+      'download.tempDir',
+      'download.packageDir'
+    ]
+
+    for (const field of requiredFields) {
+      const value = this.getNestedValue(this.config, field)
+      if (!value) {
+        throw new Error(`配置缺少必需字段: ${field}`)
+      }
+    }
+  }
+
+  getNestedValue(obj, path) {
+    return path.split('.').reduce((current, key) => current?.[key], obj)
   }
 
   async downloadPackage(project, fileName) {
+    // 参数验证
+    if (!project || !fileName) {
+      throw new Error('project 和 fileName 参数不能为空')
+    }
+
     console.log(`开始下载包: ${project}/${fileName}`)
 
     try {
@@ -37,12 +77,12 @@ export default class DownloadManager {
         }
       }
 
-      // 3. 执行分片下载
-      const downloadResult = await this.downloadWithChunks(project, fileName, packageInfo, targetPath)
+      // 3. 执行断点续传下载
+      const downloadResult = await this.downloadWithResume(project, fileName, packageInfo, targetPath)
 
       return downloadResult
     } catch (error) {
-      console.error('下载失败:', error)
+      ErrorLogger.logError('下载失败', error, { project, fileName })
       return {
         success: false,
         error: error.message
@@ -51,9 +91,15 @@ export default class DownloadManager {
   }
 
   async getPackageInfo(project, fileName) {
+    if (!project || !fileName) {
+      throw new Error('project 和 fileName 参数不能为空')
+    }
+
     try {
       const url = `${this.serverUrl}/packages/${project}/${fileName}`
-      const response = await axios.get(url)
+      const response = await axios.get(url, {
+        timeout: this.constants.downloadTimeout
+      })
 
       if (response.data.success) {
         return response.data.package || response.data.data
@@ -61,25 +107,25 @@ export default class DownloadManager {
 
       throw new Error(response.data.error || '获取包信息失败')
     } catch (error) {
-      console.error('获取包信息失败:', error.message)
+      ErrorLogger.logError('获取包信息失败', error, { project, fileName })
       return null
     }
   }
 
-  async downloadWithChunks(project, fileName, packageInfo, targetPath) {
-    console.log('开始分片下载...')
+  async downloadWithResume(project, fileName, packageInfo, targetPath) {
+    console.log('开始断点续传下载...')
 
     const temporaryPath = path.join(this.tempDir, `${project}-${fileName}`)
     await fs.ensureDir(path.dirname(temporaryPath))
     await fs.ensureDir(path.dirname(targetPath))
 
+    let writeStream = null
+
     try {
-      // 创建临时文件
-      const temporaryFile = await fs.createWriteStream(temporaryPath)
+      // 检查是否存在未完成的下载
+      const existingSize = await this.getFileSize(temporaryPath)
       let downloadedBytes = 0
 
-      // 检查是否支持断点续传
-      const existingSize = await this.getFileSize(temporaryPath)
       if (existingSize > 0) {
         console.log(`检测到未完成下载，继续从 ${existingSize} 字节开始`)
         downloadedBytes = existingSize
@@ -91,9 +137,6 @@ export default class DownloadManager {
       const headers = {}
       if (downloadedBytes > 0) {
         headers.Range = `bytes=${downloadedBytes}-`
-        // 追加模式打开文件
-        temporaryFile.close()
-        const appendStream = fs.createWriteStream(temporaryPath, { flags: 'a' })
       }
 
       // 执行下载
@@ -101,24 +144,36 @@ export default class DownloadManager {
         method: 'GET',
         url: downloadUrl,
         headers,
-        responseType: 'stream'
+        responseType: 'stream',
+        timeout: this.constants.downloadTimeout
       })
 
       const totalBytes = Number.parseInt(response.headers['content-length'] || '0') + downloadedBytes
 
       return new Promise((resolve, reject) => {
-        const stream = downloadedBytes > 0 ? fs.createWriteStream(temporaryPath, { flags: 'a' }) : temporaryFile
+        // 正确创建写入流
+        writeStream = downloadedBytes > 0
+          ? fs.createWriteStream(temporaryPath, { flags: 'a' })
+          : fs.createWriteStream(temporaryPath)
 
-        response.data.pipe(stream)
+        response.data.pipe(writeStream)
 
         let receivedBytes = downloadedBytes
+        let lastProgressTime = 0
+
         response.data.on('data', (chunk) => {
           receivedBytes += chunk.length
-          const progress = ((receivedBytes / totalBytes) * 100).toFixed(1)
-          process.stdout.write(`\r下载进度: ${progress}% (${receivedBytes}/${totalBytes} bytes)`)
+
+          // 限制进度更新频率
+          const now = Date.now()
+          if (now - lastProgressTime > this.constants.progressUpdateInterval) {
+            const progress = ((receivedBytes / totalBytes) * 100).toFixed(1)
+            process.stdout.write(`\r下载进度: ${progress}% (${receivedBytes}/${totalBytes} bytes)`)
+            lastProgressTime = now
+          }
         })
 
-        stream.on('finish', async () => {
+        writeStream.on('finish', async () => {
           console.log('\n下载完成，验证文件完整性...')
 
           try {
@@ -143,11 +198,21 @@ export default class DownloadManager {
           }
         })
 
-        stream.on('error', reject)
-        response.data.on('error', reject)
+        writeStream.on('error', (error) => {
+          ErrorLogger.logError('写入流错误', error, { temporaryPath })
+          reject(error)
+        })
+
+        response.data.on('error', (error) => {
+          ErrorLogger.logError('下载流错误', error, { downloadUrl })
+          reject(error)
+        })
       })
     } catch (error) {
-      // 清理临时文件
+      // 确保清理资源
+      if (writeStream) {
+        writeStream.destroy()
+      }
       await fs.remove(temporaryPath).catch(() => {})
       throw error
     }
@@ -188,22 +253,27 @@ export default class DownloadManager {
 
   async cleanupTempFiles() {
     try {
-      // 清理超过 24 小时的临时文件
+      // 清理超过配置时间的临时文件
       const files = await fs.readdir(this.tempDir)
       const now = Date.now()
-      const maxAge = 24 * 60 * 60 * 1000 // 24 小时
 
       for (const file of files) {
         const filePath = path.join(this.tempDir, file)
-        const stats = await fs.stat(filePath)
 
-        if (now - stats.mtimeMs > maxAge) {
-          await fs.remove(filePath)
-          console.log(`清理临时文件: ${file}`)
+        try {
+          const stats = await fs.stat(filePath)
+
+          if (now - stats.mtimeMs > this.constants.tempFileMaxAge) {
+            await fs.remove(filePath)
+            console.log(`清理临时文件: ${file}`)
+          }
+        } catch (fileError) {
+          // 单个文件处理失败不影响其他文件
+          ErrorLogger.logError('处理临时文件失败', fileError, { filePath })
         }
       }
     } catch (error) {
-      console.error('清理临时文件失败:', error)
+      ErrorLogger.logError('清理临时文件失败', error, { tempDir: this.tempDir })
     }
   }
 }
