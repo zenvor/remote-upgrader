@@ -14,7 +14,7 @@ export function useUpload() {
     eta: 0,
     status: '准备中'
   })
-  
+
   const uploadHistory = ref([])
   const calculatingMD5 = ref(false)
   let currentUploadController = null // 用于取消上传
@@ -23,12 +23,12 @@ export function useUpload() {
   const calculateFileHash = async (file) => {
     calculatingMD5.value = true
     uploadStatus.value.status = '计算MD5中'
-    
+
     try {
       const md5 = await calculateFileMD5(file, () => {
         // MD5 计算进度（如需要可在这里更新UI）
       })
-      
+
       uploadStatus.value.status = '准备中'
       return md5
     } catch (error) {
@@ -71,10 +71,10 @@ export function useUpload() {
           const now = Date.now()
           const timeDiff = (now - lastTime) / 1000 // 秒
           const loadedDiff = progressEvent.loaded - lastLoaded
-          
+
           // 计算速度（字节/秒）
           const speed = timeDiff > 0 ? loadedDiff / timeDiff : 0
-          
+
           // 计算剩余时间（秒）
           const remaining = progressEvent.total - progressEvent.loaded
           const eta = speed > 0 ? remaining / speed : 0
@@ -96,15 +96,14 @@ export function useUpload() {
       // 上传成功
       uploadStatus.value.status = '上传完成'
       uploadStatus.value.active = false
-      
+
       // 显示成功消息
       toast.success(`文件 ${file.name} 上传成功！`, '上传成功')
-      
-      return { success: true, message: '上传完成', data: response }
 
+      return { success: true, message: '上传完成', data: response }
     } catch (error) {
       console.error('上传失败:', error)
-      
+
       if (error.name === 'AbortError' || error.code === 'CANCELED') {
         uploadStatus.value.status = '已取消'
         toast.info('上传已取消', '取消上传')
@@ -112,7 +111,7 @@ export function useUpload() {
         uploadStatus.value.status = '上传失败'
         toast.error(`上传失败: ${error.message}`, '上传错误')
       }
-      
+
       uploadStatus.value.active = false
       throw error
     } finally {
@@ -142,7 +141,7 @@ export function useUpload() {
     try {
       const response = await packageApi.getPackageList()
       const packages = response?.packages || []
-      uploadHistory.value = packages.map(item => ({
+      uploadHistory.value = packages.map((item) => ({
         ...item,
         status: '已完成'
       }))
@@ -179,13 +178,13 @@ export function useUpload() {
     uploadStatus,
     uploadHistory,
     calculatingMD5,
-    
+
     // 方法
     calculateFileHash,
     startUpload,
     cancelUpload,
     fetchUploadHistory,
-    
+
     // 工具函数
     formatFileSize,
     formatSpeed,

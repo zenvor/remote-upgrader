@@ -1,6 +1,6 @@
 // 中文注释：ESM 工具方法
-import crypto from 'crypto';
-import fs from 'fs-extra';
+import crypto from 'node:crypto'
+import fs from 'fs-extra'
 
 /**
  * 计算文件的 MD5 哈希值
@@ -9,19 +9,19 @@ import fs from 'fs-extra';
  */
 function calculateFileHash(filePath) {
   return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('md5');
-    const stream = fs.createReadStream(filePath);
-    
+    const hash = crypto.createHash('md5')
+    const stream = fs.createReadStream(filePath)
+
     stream.on('data', (data) => {
-      hash.update(data);
-    });
-    
+      hash.update(data)
+    })
+
     stream.on('end', () => {
-      resolve(hash.digest('hex'));
-    });
-    
-    stream.on('error', reject);
-  });
+      resolve(hash.digest('hex'))
+    })
+
+    stream.on('error', reject)
+  })
 }
 
 /**
@@ -30,7 +30,7 @@ function calculateFileHash(filePath) {
  * @returns {string} MD5 哈希值
  */
 function calculateDataHash(data) {
-  return crypto.createHash('md5').update(data).digest('hex');
+  return crypto.createHash('md5').update(data).digest('hex')
 }
 
 /**
@@ -38,11 +38,7 @@ function calculateDataHash(data) {
  * @returns {string} 上传ID
  */
 function generateUploadId() {
-  return crypto.randomBytes(16).toString('hex');
+  return crypto.randomBytes(16).toString('hex')
 }
 
-export {
-  calculateFileHash,
-  calculateDataHash,
-  generateUploadId
-};
+export { calculateFileHash, calculateDataHash, generateUploadId }

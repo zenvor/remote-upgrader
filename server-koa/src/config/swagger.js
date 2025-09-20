@@ -1,10 +1,10 @@
 // 中文注释：ESM 导入
-import swaggerJSDoc from 'swagger-jsdoc';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import swaggerJSDoc from 'swagger-jsdoc'
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // Swagger 配置
 const swaggerOptions = {
@@ -54,7 +54,7 @@ const swaggerOptions = {
           },
           required: ['success']
         },
-        
+
         // 包信息
         Package: {
           type: 'object',
@@ -79,11 +79,11 @@ const swaggerOptions = {
             packagePath: {
               type: 'string',
               description: '包文件路径'
-            },
-            // manifests 机制已废弃，不再暴露相关字段
+            }
+            // Manifests 机制已废弃，不再暴露相关字段
           }
         },
-        
+
         // 设备信息
         Device: {
           type: 'object',
@@ -96,7 +96,11 @@ const swaggerOptions = {
               description: '系统信息',
               properties: {
                 platform: { type: 'string', description: '设备平台' },
-                osVersion: { type: 'string', nullable: true, description: '操作系统版本' },
+                osVersion: {
+                  type: 'string',
+                  nullable: true,
+                  description: '操作系统版本'
+                },
                 arch: { type: 'string', nullable: true, description: '系统架构' }
               }
             },
@@ -104,53 +108,128 @@ const swaggerOptions = {
               type: 'object',
               description: '代理信息',
               properties: {
-                agentVersion: { type: 'string', nullable: true, description: '设备代理版本' }
+                agentVersion: {
+                  type: 'string',
+                  nullable: true,
+                  description: '设备代理版本'
+                }
               }
             },
-            status: { type: 'string', enum: ['online', 'offline'], description: '设备状态' },
-            connectedAt: { type: 'string', format: 'date-time', description: '连接时间' },
-            lastHeartbeat: { type: 'string', format: 'date-time', description: '最后心跳时间' },
+            status: {
+              type: 'string',
+              enum: ['online', 'offline'],
+              description: '设备状态'
+            },
+            connectedAt: {
+              type: 'string',
+              format: 'date-time',
+              description: '连接时间'
+            },
+            lastHeartbeat: {
+              type: 'string',
+              format: 'date-time',
+              description: '最后心跳时间'
+            },
             network: {
               type: 'object',
               description: '网络信息分组',
               properties: {
-                wifiName: { type: 'string', nullable: true, description: 'WiFi 名称' },
-                wifiSignal: { type: 'number', nullable: true, description: 'WiFi 信号强度' },
-                publicIp: { type: 'string', nullable: true, description: '公网 IP' },
-                localIp: { type: 'string', nullable: true, description: '本地 IP' },
-                macAddresses: { type: 'array', items: { type: 'string' }, nullable: true, description: 'MAC 地址列表' }
+                wifiName: {
+                  type: 'string',
+                  nullable: true,
+                  description: 'WiFi 名称'
+                },
+                wifiSignal: {
+                  type: 'number',
+                  nullable: true,
+                  description: 'WiFi 信号强度'
+                },
+                publicIp: {
+                  type: 'string',
+                  nullable: true,
+                  description: '公网 IP'
+                },
+                localIp: {
+                  type: 'string',
+                  nullable: true,
+                  description: '本地 IP'
+                },
+                macAddresses: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  nullable: true,
+                  description: 'MAC 地址列表'
+                }
               }
             },
             storage: {
               type: 'object',
               description: '存储与权限',
               properties: {
-                diskFreeBytes: { type: 'integer', nullable: true, description: '部署分区可用空间（字节）' },
-                writable: { type: 'boolean', nullable: true, description: '部署目录可写' }
+                diskFreeBytes: {
+                  type: 'integer',
+                  nullable: true,
+                  description: '部署分区可用空间（字节）'
+                },
+                writable: {
+                  type: 'boolean',
+                  nullable: true,
+                  description: '部署目录可写'
+                }
               }
             },
             health: {
               type: 'object',
               description: '运行健康',
               properties: {
-                uptimeSeconds: { type: 'integer', nullable: true, description: '运行时长（秒）' }
+                uptimeSeconds: {
+                  type: 'integer',
+                  nullable: true,
+                  description: '运行时长（秒）'
+                }
               }
             },
             deploy: {
               type: 'object',
               description: '部署信息',
               properties: {
-                rollbackAvailable: { type: 'boolean', nullable: true, description: '可回滚' },
-                lastDeployStatus: { type: 'string', nullable: true, description: '最近部署状态' },
-                lastDeployAt: { type: 'string', format: 'date-time', nullable: true, description: '最近部署时间' },
-                lastRollbackAt: { type: 'string', format: 'date-time', nullable: true, description: '最近回滚时间' },
+                rollbackAvailable: {
+                  type: 'boolean',
+                  nullable: true,
+                  description: '可回滚'
+                },
+                lastDeployStatus: {
+                  type: 'string',
+                  nullable: true,
+                  description: '最近部署状态'
+                },
+                lastDeployAt: {
+                  type: 'string',
+                  format: 'date-time',
+                  nullable: true,
+                  description: '最近部署时间'
+                },
+                lastRollbackAt: {
+                  type: 'string',
+                  format: 'date-time',
+                  nullable: true,
+                  description: '最近回滚时间'
+                },
                 currentDeployPaths: {
                   type: 'object',
                   nullable: true,
                   description: '已记录的部署路径',
                   properties: {
-                    frontend: { type: 'string', nullable: true, description: '前端部署路径' },
-                    backend: { type: 'string', nullable: true, description: '后端部署路径' }
+                    frontend: {
+                      type: 'string',
+                      nullable: true,
+                      description: '前端部署路径'
+                    },
+                    backend: {
+                      type: 'string',
+                      nullable: true,
+                      description: '后端部署路径'
+                    }
                   }
                 },
                 currentVersions: {
@@ -162,20 +241,54 @@ const swaggerOptions = {
                       type: 'object',
                       nullable: true,
                       properties: {
-                        version: { type: 'string', nullable: true, description: '版本号' },
-                        deployDate: { type: 'string', format: 'date-time', nullable: true, description: '部署时间' },
-                        deployPath: { type: 'string', nullable: true, description: '部署路径' },
-                        packageInfo: { type: 'object', nullable: true, description: '包信息' }
+                        version: {
+                          type: 'string',
+                          nullable: true,
+                          description: '版本号'
+                        },
+                        deployDate: {
+                          type: 'string',
+                          format: 'date-time',
+                          nullable: true,
+                          description: '部署时间'
+                        },
+                        deployPath: {
+                          type: 'string',
+                          nullable: true,
+                          description: '部署路径'
+                        },
+                        packageInfo: {
+                          type: 'object',
+                          nullable: true,
+                          description: '包信息'
+                        }
                       }
                     },
                     backend: {
                       type: 'object',
                       nullable: true,
                       properties: {
-                        version: { type: 'string', nullable: true, description: '版本号' },
-                        deployDate: { type: 'string', format: 'date-time', nullable: true, description: '部署时间' },
-                        deployPath: { type: 'string', nullable: true, description: '部署路径' },
-                        packageInfo: { type: 'object', nullable: true, description: '包信息' }
+                        version: {
+                          type: 'string',
+                          nullable: true,
+                          description: '版本号'
+                        },
+                        deployDate: {
+                          type: 'string',
+                          format: 'date-time',
+                          nullable: true,
+                          description: '部署时间'
+                        },
+                        deployPath: {
+                          type: 'string',
+                          nullable: true,
+                          description: '部署路径'
+                        },
+                        packageInfo: {
+                          type: 'object',
+                          nullable: true,
+                          description: '包信息'
+                        }
                       }
                     }
                   }
@@ -185,7 +298,7 @@ const swaggerOptions = {
             hasDeployPath: { type: 'boolean', description: '是否已配置部署路径' }
           }
         },
-        
+
         // 发送命令请求
         SendCommandRequest: {
           type: 'object',
@@ -197,13 +310,14 @@ const swaggerOptions = {
             },
             data: {
               type: 'object',
-              description: '命令数据（随命令变化）。支持的命令详见 /docs/device-commands 文档。常用命令：cmd:upgrade, cmd:rollback, cmd:status, getCurrentVersion'
+              description:
+                '命令数据（随命令变化）。支持的命令详见 /docs/device-commands 文档。常用命令：cmd:upgrade, cmd:rollback, cmd:status, getCurrentVersion'
             }
           },
           required: ['command']
         }
       },
-      
+
       // 参数定义
       parameters: {
         ProjectParam: {
@@ -236,7 +350,7 @@ const swaggerOptions = {
         }
       }
     },
-    
+
     tags: [
       {
         name: 'Upload',
@@ -256,13 +370,10 @@ const swaggerOptions = {
       }
     ]
   },
-  apis: [
-    path.join(__dirname, '../routes/*.js'),
-    path.join(__dirname, '../controllers/*.js')
-  ]
-};
+  apis: [path.join(__dirname, '../routes/*.js'), path.join(__dirname, '../controllers/*.js')]
+}
 
 // 生成 Swagger 规范
-const swaggerSpec = swaggerJSDoc(swaggerOptions);
+const swaggerSpec = swaggerJSDoc(swaggerOptions)
 
-export default swaggerSpec;
+export default swaggerSpec

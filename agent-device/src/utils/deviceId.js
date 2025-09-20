@@ -1,25 +1,26 @@
 // 中文注释：ESM 导入
 // 中文注释：node-machine-id 为 CommonJS 模块，ESM 下需默认导入再解构
-import machineIdModule from 'node-machine-id';
-const { machineId, machineIdSync } = machineIdModule;
-import si from 'systeminformation';
-import fs from 'fs-extra';
-import path from 'path';
-import crypto from 'crypto';
-import os from 'os';
-import { fileURLToPath } from 'url';
-import { DateHelper } from './common.js';
+import path from 'node:path'
+import crypto from 'node:crypto'
+import os from 'node:os'
+import { fileURLToPath } from 'node:url'
+import fs from 'fs-extra'
+import si from 'systeminformation'
+import machineIdModule from 'node-machine-id'
+import { DateHelper } from './common.js'
+
+const { machineId, machineIdSync } = machineIdModule
 
 export default class DeviceIdGenerator {
   constructor() {
     // 中文注释：ESM 环境下构造 __dirname
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = path.dirname(__filename)
+
     // 为支持多实例，根据实例ID使用不同的配置文件
-    const instanceId = process.env.AGENT_INSTANCE_ID;
-    const configFileName = instanceId ? `device-info-${instanceId}.json` : 'device-info.json';
-    this.deviceIdFile = path.join(__dirname, '../../config', configFileName);
+    const instanceId = process.env.AGENT_INSTANCE_ID
+    const configFileName = instanceId ? `device-info-${instanceId}.json` : 'device-info.json'
+    this.deviceIdFile = path.join(__dirname, '../../config', configFileName)
   }
 
   /**
@@ -29,50 +30,49 @@ export default class DeviceIdGenerator {
   async generateDeviceId() {
     try {
       // 首先尝试从本地文件读取已保存的设备ID
-      const savedId = await this.loadSavedDeviceId();
+      const savedId = await this.loadSavedDeviceId()
       if (savedId) {
-        console.log('🔍 使用已保存的设备ID:', savedId);
-        return savedId;
+        console.log('🔍 使用已保存的设备ID:', savedId)
+        return savedId
       }
 
-      console.log('🔧 正在生成新的设备唯一标识符...');
-      
+      console.log('🔧 正在生成新的设备唯一标识符...')
+
       // 方法1: 获取机器UUID (最推荐)
-      const machineUuid = await this.getMachineId();
+      const machineUuid = await this.getMachineId()
       if (machineUuid) {
-        const deviceId = this.formatDeviceId('machine', machineUuid);
-        await this.saveDeviceId(deviceId, 'machine-uuid', machineUuid);
-        return deviceId;
+        const deviceId = this.formatDeviceId('machine', machineUuid)
+        await this.saveDeviceId(deviceId, 'machine-uuid', machineUuid)
+        return deviceId
       }
 
       // 方法2: 获取主板信息
-      const boardInfo = await this.getBoardInfo();
+      const boardInfo = await this.getBoardInfo()
       if (boardInfo) {
-        const deviceId = this.formatDeviceId('board', boardInfo);
-        await this.saveDeviceId(deviceId, 'board-info', boardInfo);
-        return deviceId;
+        const deviceId = this.formatDeviceId('board', boardInfo)
+        await this.saveDeviceId(deviceId, 'board-info', boardInfo)
+        return deviceId
       }
 
       // 方法3: 获取网络接口MAC地址
-      const macInfo = await this.getPrimaryMacAddress();
+      const macInfo = await this.getPrimaryMacAddress()
       if (macInfo) {
-        const deviceId = this.formatDeviceId('mac', macInfo);
-        await this.saveDeviceId(deviceId, 'mac-address', macInfo);
-        return deviceId;
+        const deviceId = this.formatDeviceId('mac', macInfo)
+        await this.saveDeviceId(deviceId, 'mac-address', macInfo)
+        return deviceId
       }
 
       // 方法4: 生成基于系统信息的唯一标识
-      const systemId = await this.generateSystemBasedId();
-      const deviceId = this.formatDeviceId('system', systemId);
-      await this.saveDeviceId(deviceId, 'system-generated', systemId);
-      return deviceId;
-
+      const systemId = await this.generateSystemBasedId()
+      const deviceId = this.formatDeviceId('system', systemId)
+      await this.saveDeviceId(deviceId, 'system-generated', systemId)
+      return deviceId
     } catch (error) {
-      console.error('❌ 生成设备ID时出错:', error);
+      console.error('❌ 生成设备ID时出错:', error)
       // 最后的fallback：生成随机ID并保存
-      const fallbackId = this.generateFallbackId();
-      await this.saveDeviceId(fallbackId, 'fallback', 'random-generated');
-      return fallbackId;
+      const fallbackId = this.generateFallbackId()
+      await this.saveDeviceId(fallbackId, 'fallback', 'random-generated')
+      return fallbackId
     }
   }
 
@@ -81,18 +81,18 @@ export default class DeviceIdGenerator {
    */
   async getMachineId() {
     try {
-      const id = await machineId();
-      console.log('✅ 获取到机器UUID:', id.substring(0, 8) + '...');
-      return id;
-    } catch (error) {
+      const id = await machineId()
+      console.log('✅ 获取到机器UUID:', id.slice(0, 8) + '...')
+      return id
+    } catch {
       try {
         // 尝试同步版本
-        const id = machineIdSync();
-        console.log('✅ 获取到机器UUID (同步):', id.substring(0, 8) + '...');
-        return id;
+        const id = machineIdSync()
+        console.log('✅ 获取到机器UUID (同步):', id.slice(0, 8) + '...')
+        return id
       } catch (syncError) {
-        console.log('⚠️ 无法获取机器UUID:', syncError.message);
-        return null;
+        console.log('⚠️ 无法获取机器UUID:', syncError.message)
+        return null
       }
     }
   }
@@ -117,41 +117,41 @@ export default class DeviceIdGenerator {
         'system version',
         'chassisassetag',
         'asset-1234567890'
-      ]);
+      ])
 
       // 创建校验函数
       const isValidIdentifier = (id) => {
-        if (!id) return false;
-        const normalizedId = id.toLowerCase().trim();
-        return normalizedId && !INVALID_IDENTIFIERS.has(normalizedId);
-      };
+        if (!id) return false
+        const normalizedId = id.toLowerCase().trim()
+        return normalizedId && !INVALID_IDENTIFIERS.has(normalizedId)
+      }
 
-      const system = await si.system();
-      const baseboard = await si.baseboard();
+      const system = await si.system()
+      const baseboard = await si.baseboard()
 
       // 优先使用主板序列号
       if (isValidIdentifier(baseboard.serial)) {
-        console.log('✅ 获取到有效的主板序列号');
-        return baseboard.serial;
+        console.log('✅ 获取到有效的主板序列号')
+        return baseboard.serial
       }
 
       // 使用主板UUID
       if (isValidIdentifier(baseboard.uuid)) {
-        console.log('✅ 获取到有效的主板UUID');
-        return baseboard.uuid;
+        console.log('✅ 获取到有效的主板UUID')
+        return baseboard.uuid
       }
 
       // 使用系统UUID
       if (isValidIdentifier(system.uuid)) {
-        console.log('✅ 获取到有效的系统UUID');
-        return system.uuid;
+        console.log('✅ 获取到有效的系统UUID')
+        return system.uuid
       }
 
-      console.log('⚠️ 未找到可用的主板/系统标识符');
-      return null;
+      console.log('⚠️ 未找到可用的主板/系统标识符')
+      return null
     } catch (error) {
-      console.log('⚠️ 获取主板信息失败:', error.message);
-      return null;
+      console.log('⚠️ 获取主板信息失败:', error.message)
+      return null
     }
   }
 
@@ -160,37 +160,38 @@ export default class DeviceIdGenerator {
    */
   async getPrimaryMacAddress() {
     try {
-      const networkInterfaces = await si.networkInterfaces();
-      
+      const networkInterfaces = await si.networkInterfaces()
+
       // 查找主要的物理网络接口
-      const primaryInterface = networkInterfaces.find(iface => 
-        !iface.virtual && 
-        !iface.internal && 
-        iface.mac && 
-        iface.mac !== '00:00:00:00:00:00' &&
-        (iface.type === 'wired' || iface.type === 'wireless')
-      );
-      
+      const primaryInterface = networkInterfaces.find(
+        (iface) =>
+          !iface.virtual &&
+          !iface.internal &&
+          iface.mac &&
+          iface.mac !== '00:00:00:00:00:00' &&
+          (iface.type === 'wired' || iface.type === 'wireless')
+      )
+
       if (primaryInterface) {
-        console.log('✅ 获取到主网卡MAC地址');
-        return primaryInterface.mac;
+        console.log('✅ 获取到主网卡MAC地址')
+        return primaryInterface.mac
       }
 
       // 备选：使用第一个非虚拟接口
-      const firstPhysical = networkInterfaces.find(iface =>
-        !iface.virtual && !iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00'
-      );
+      const firstPhysical = networkInterfaces.find(
+        (iface) => !iface.virtual && !iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00'
+      )
 
       if (firstPhysical) {
-        console.log('✅ 获取到网卡MAC地址 (备选)');
-        return firstPhysical.mac;
+        console.log('✅ 获取到网卡MAC地址 (备选)')
+        return firstPhysical.mac
       }
-      
-      console.log('⚠️ 未找到可用的物理网络接口');
-      return null;
+
+      console.log('⚠️ 未找到可用的物理网络接口')
+      return null
     } catch (error) {
-      console.log('⚠️ 获取网络接口失败:', error.message);
-      return null;
+      console.log('⚠️ 获取网络接口失败:', error.message)
+      return null
     }
   }
 
@@ -199,29 +200,29 @@ export default class DeviceIdGenerator {
    */
   async generateSystemBasedId() {
     try {
-      const system = await si.system();
-      const os_info = await si.osInfo();
-      const cpu = await si.cpu();
-      
+      const system = await si.system()
+      const os_info = await si.osInfo()
+      const cpu = await si.cpu()
+
       // 组合多个系统信息创建唯一标识
       const components = [
         system.manufacturer || 'unknown',
-        system.model || 'unknown', 
+        system.model || 'unknown',
         system.version || 'unknown',
         os_info.platform || 'unknown',
         os_info.hostname || 'unknown',
         cpu.manufacturer || 'unknown',
         cpu.brand || 'unknown'
-      ];
-      
-      const combined = components.join('|');
-      const hash = crypto.createHash('sha256').update(combined).digest('hex');
-      
-      console.log('✅ 基于系统信息生成ID:', hash.substring(0, 16) + '...');
-      return hash.substring(0, 32); // 取前32位
+      ]
+
+      const combined = components.join('|')
+      const hash = crypto.createHash('sha256').update(combined).digest('hex')
+
+      console.log('✅ 基于系统信息生成ID:', hash.slice(0, 16) + '...')
+      return hash.slice(0, 32) // 取前32位
     } catch (error) {
-      console.log('⚠️ 生成系统ID失败:', error.message);
-      throw error;
+      console.log('⚠️ 生成系统ID失败:', error.message)
+      throw error
     }
   }
 
@@ -232,12 +233,12 @@ export default class DeviceIdGenerator {
   formatDeviceId(type, rawId) {
     // 只使用硬件标识，不包含进程相关信息，确保设备ID持久不变
     // 为了支持同一机器上的多个agent实例，只使用AGENT_INSTANCE_ID（如果设置）
-    const instanceId = process.env.AGENT_INSTANCE_ID;
-    const combinedId = instanceId ? `${rawId}-${instanceId}` : rawId;
+    const instanceId = process.env.AGENT_INSTANCE_ID
+    const combinedId = instanceId ? `${rawId}-${instanceId}` : rawId
 
     // 使用SHA256哈希保护隐私，避免暴露原始硬件信息
-    const hash = crypto.createHash('sha256').update(combinedId).digest('hex');
-    return `device-${type}-${hash.substring(0, 16)}`;
+    const hash = crypto.createHash('sha256').update(combinedId).digest('hex')
+    return `device-${type}-${hash.slice(0, 16)}`
   }
 
   /**
@@ -245,20 +246,18 @@ export default class DeviceIdGenerator {
    * 基于主机名和架构信息，确保在同一台机器上保持一致
    */
   generateFallbackId() {
-    const hostname = os.hostname();
-    const platform = os.platform();
-    const arch = os.arch();
-    const instanceId = process.env.AGENT_INSTANCE_ID;
+    const hostname = os.hostname()
+    const platform = os.platform()
+    const arch = os.arch()
+    const instanceId = process.env.AGENT_INSTANCE_ID
 
     // 使用相对稳定的系统信息，避免使用时间戳和随机数
-    const combined = instanceId
-      ? `${hostname}-${platform}-${arch}-${instanceId}`
-      : `${hostname}-${platform}-${arch}`;
+    const combined = instanceId ? `${hostname}-${platform}-${arch}-${instanceId}` : `${hostname}-${platform}-${arch}`
 
-    const hash = crypto.createHash('sha256').update(combined).digest('hex');
+    const hash = crypto.createHash('sha256').update(combined).digest('hex')
 
-    console.log('⚠️ 使用fallback设备ID（基于主机名和系统信息）');
-    return `device-fallback-${hash.substring(0, 16)}`;
+    console.log('⚠️ 使用fallback设备ID（基于主机名和系统信息）')
+    return `device-fallback-${hash.slice(0, 16)}`
   }
 
   /**
@@ -269,17 +268,17 @@ export default class DeviceIdGenerator {
       const deviceInfo = {
         deviceId,
         method,
-        rawValue: rawValue.substring(0, 100), // 限制长度防止敏感信息泄露
+        rawValue: rawValue.slice(0, 100), // 限制长度防止敏感信息泄露
         generatedAt: DateHelper.getCurrentDate(),
         hostname: os.hostname(),
         platform: os.platform(),
         arch: os.arch()
-      };
-      
-      await fs.writeJson(this.deviceIdFile, deviceInfo, { spaces: 2 });
-      console.log('💾 设备ID已保存到本地文件');
+      }
+
+      await fs.writeJson(this.deviceIdFile, deviceInfo, { spaces: 2 })
+      console.log('💾 设备ID已保存到本地文件')
     } catch (error) {
-      console.warn('⚠️ 保存设备ID失败:', error.message);
+      console.warn('⚠️ 保存设备ID失败:', error.message)
     }
   }
 
@@ -289,17 +288,18 @@ export default class DeviceIdGenerator {
   async loadSavedDeviceId() {
     try {
       if (await fs.pathExists(this.deviceIdFile)) {
-        const deviceInfo = await fs.readJson(this.deviceIdFile);
-        
+        const deviceInfo = await fs.readJson(this.deviceIdFile)
+
         // 验证设备ID的有效性
         if (deviceInfo.deviceId && deviceInfo.deviceId.startsWith('device-')) {
-          return deviceInfo.deviceId;
+          return deviceInfo.deviceId
         }
       }
-      return null;
+
+      return null
     } catch (error) {
-      console.log('⚠️ 读取设备ID文件失败:', error.message);
-      return null;
+      console.log('⚠️ 读取设备ID文件失败:', error.message)
+      return null
     }
   }
 
@@ -308,10 +308,10 @@ export default class DeviceIdGenerator {
    */
   async getDeviceInfo() {
     try {
-      const system = await si.system();
-      const osInfo = await si.osInfo();
-      const networkInterfaces = await si.networkInterfaces();
-      
+      const system = await si.system()
+      const osInfo = await si.osInfo()
+      const networkInterfaces = await si.networkInterfaces()
+
       return {
         manufacturer: system.manufacturer,
         model: system.model,
@@ -319,16 +319,16 @@ export default class DeviceIdGenerator {
         platform: osInfo.platform,
         hostname: osInfo.hostname,
         arch: osInfo.arch,
-        networkInterfaces: networkInterfaces.map(iface => ({
+        networkInterfaces: networkInterfaces.map((iface) => ({
           name: iface.iface,
           mac: iface.mac,
           type: iface.type,
           virtual: iface.virtual
         }))
-      };
+      }
     } catch (error) {
-      console.warn('获取设备详细信息失败:', error);
-      return {};
+      console.warn('获取设备详细信息失败:', error)
+      return {}
     }
   }
 }

@@ -6,7 +6,7 @@
 // 设备管理 API
 export * as deviceApi from './modules/deviceApi'
 
-// 包管理 API  
+// 包管理 API
 export * as packageApi from './modules/packageApi'
 
 // 上传管理 API

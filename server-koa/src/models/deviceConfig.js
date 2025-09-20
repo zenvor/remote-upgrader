@@ -5,7 +5,7 @@
  */
 class DeviceConfig {
   constructor() {
-    this.initializeCache();
+    this.initializeCache()
   }
 
   /**
@@ -15,29 +15,27 @@ class DeviceConfig {
     // 这里可以预加载常用数据到缓存
   }
 
-
   /**
    * 删除设备配置
    */
   async removeDeviceConfig(deviceId) {
     if (this.config[deviceId]) {
-      delete this.config[deviceId];
-      await this.saveConfig();
-      return true;
+      delete this.config[deviceId]
+      await this.saveConfig()
+      return true
     }
-    return false;
+
+    return false
   }
-
-
 
   /**
    * 获取所有设备配置
    */
   getAllConfigs() {
-    return { ...this.config };
+    return { ...this.config }
   }
 }
 
-const deviceConfig = new DeviceConfig();
+const deviceConfig = new DeviceConfig()
 
-export default deviceConfig;
+export default deviceConfig

@@ -35,14 +35,16 @@ export function useDevices() {
     // 统一从新结构 deploy.currentDeployments 中派生路径与版本，兼容旧字段
     const currentDeployments = deploy.currentDeployments || {}
     const deployPaths = {
-      frontend: currentDeployments.frontend?.deployPath
-        || deploy.currentDeployPaths?.frontend
-        || device.deployPaths?.frontend
-        || null,
-      backend: currentDeployments.backend?.deployPath
-        || deploy.currentDeployPaths?.backend
-        || device.deployPaths?.backend
-        || null
+      frontend:
+        currentDeployments.frontend?.deployPath ||
+        deploy.currentDeployPaths?.frontend ||
+        device.deployPaths?.frontend ||
+        null,
+      backend:
+        currentDeployments.backend?.deployPath ||
+        deploy.currentDeployPaths?.backend ||
+        device.deployPaths?.backend ||
+        null
     }
     // 生成与后端一致的 currentVersions 结构（对象形态），兼容旧字段
     const buildVersionObj = (project) => {
@@ -55,7 +57,7 @@ export function useDevices() {
         packageInfo: newD.packageInfo ?? oldD.packageInfo ?? null,
         status: newD.status ?? oldD.status ?? null,
         lastOperationType: newD.lastOperationType ?? oldD.lastOperationType ?? null,
-        lastOperationDate: newD.lastOperationDate ?? oldD.lastOperationDate ?? null,
+        lastOperationDate: newD.lastOperationDate ?? oldD.lastOperationDate ?? null
       }
     }
     const currentVersions = {
@@ -72,9 +74,10 @@ export function useDevices() {
       storage,
       health,
       deploy,
-      hasDeployPath: typeof device.hasDeployPath === 'boolean'
-        ? device.hasDeployPath
-        : Boolean(deployPaths.frontend || deployPaths.backend),
+      hasDeployPath:
+        typeof device.hasDeployPath === 'boolean'
+          ? device.hasDeployPath
+          : Boolean(deployPaths.frontend || deployPaths.backend),
       version: currentVersions.frontend?.version || currentVersions.backend?.version || null,
       platform: system.platform || null,
       osVersion: system.osVersion || null,
@@ -124,9 +127,10 @@ export function useDevices() {
       const list = Array.isArray(response?.devices) ? response.devices.map(normalizeDevice) : []
       devices.value = list
       total.value = typeof response?.total === 'number' ? response.total : list.length
-      onlineCount.value = typeof response?.onlineCount === 'number'
-        ? response.onlineCount
-        : list.filter(device => device.status === 'online').length
+      onlineCount.value =
+        typeof response?.onlineCount === 'number'
+          ? response.onlineCount
+          : list.filter((device) => device.status === 'online').length
 
       filtersState.value = {
         status: response?.filters?.status || query.status || 'all',
@@ -135,9 +139,10 @@ export function useDevices() {
 
       const currentPageNum = typeof response?.pageNum === 'number' ? response.pageNum : query.pageNum
       const currentPageSize = typeof response?.pageSize === 'number' ? response.pageSize : query.pageSize
-      const totalPages = typeof response?.totalPages === 'number'
-        ? response.totalPages
-        : Math.max(1, Math.ceil((total.value || 0) / currentPageSize))
+      const totalPages =
+        typeof response?.totalPages === 'number'
+          ? response.totalPages
+          : Math.max(1, Math.ceil((total.value || 0) / currentPageSize))
 
       paginationState.value = {
         pageNum: currentPageNum,
@@ -183,11 +188,11 @@ export function useDevices() {
 
       if (response.success) {
         // 更新设备状态为升级中
-        const deviceIndex = devices.value.findIndex(d => d.deviceId === device.deviceId)
+        const deviceIndex = devices.value.findIndex((d) => d.deviceId === device.deviceId)
         if (deviceIndex !== -1) {
           devices.value[deviceIndex].status = 'upgrading'
         }
-        
+
         toast.success(`设备 "${device.deviceName}" 升级命令已发送`, '升级启动')
       }
     } catch (error) {
@@ -204,14 +209,14 @@ export function useDevices() {
 
       if (response.success) {
         // 更新设备状态为升级中（回滚也是一种升级操作）
-        const deviceIndex = devices.value.findIndex(d => d.deviceId === device.deviceId)
+        const deviceIndex = devices.value.findIndex((d) => d.deviceId === device.deviceId)
         if (deviceIndex !== -1) {
           devices.value[deviceIndex] = {
             ...devices.value[deviceIndex],
             status: 'upgrading'
           }
         }
-        
+
         toast.success(`设备 "${device.deviceName}" 回滚命令已发送`, '回滚启动')
       }
     } catch (error) {
@@ -223,9 +228,7 @@ export function useDevices() {
 
   // 批量升级
   const batchUpgrade = async (deviceList, project, packageInfo, options = {}) => {
-    const promises = deviceList.map(device => 
-      upgradeDevice(device, project, packageInfo, options)
-    )
+    const promises = deviceList.map((device) => upgradeDevice(device, project, packageInfo, options))
 
     try {
       await Promise.all(promises)
@@ -238,9 +241,7 @@ export function useDevices() {
 
   // 批量回滚
   const batchRollback = async (deviceList, project) => {
-    const promises = deviceList.map(device => 
-      rollbackDevice(device, project)
-    )
+    const promises = deviceList.map((device) => rollbackDevice(device, project))
 
     try {
       await Promise.all(promises)
@@ -336,8 +337,6 @@ export function useDevices() {
     }
   }
 
-  
-
   // 发送设备命令
   const sendDeviceCommand = async (deviceId, command, data = {}) => {
     try {
@@ -362,9 +361,7 @@ export function useDevices() {
 
   // 批量重启
   const batchRestart = async (deviceList, service = 'all') => {
-    const promises = deviceList.map(device => 
-      restartDevice(device, service)
-    )
+    const promises = deviceList.map((device) => restartDevice(device, service))
 
     try {
       await Promise.all(promises)
@@ -374,7 +371,6 @@ export function useDevices() {
       throw error
     }
   }
-
 
   return {
     // 响应式状态
@@ -387,7 +383,7 @@ export function useDevices() {
     deviceLogs,
     filters: filtersState,
     pagination: paginationState,
-    
+
     // 设备管理功能
     fetchDevices,
     upgradeDevice,
@@ -398,10 +394,9 @@ export function useDevices() {
     sendDeviceCommand,
     restartDevice,
     batchRestart,
-    
+
     // 轮询与离线检测
     startOfflineDetection,
-    stopOfflineDetection,
-    
+    stopOfflineDetection
   }
 }

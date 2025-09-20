@@ -1,16 +1,16 @@
 // 中文注释：ESM 导入
-import Router from '@koa/router';
-import { 
-  getPackages, 
-  getPackageDetail, 
-  deletePackage, 
+import Router from '@koa/router'
+import {
+  getPackages,
+  getPackageDetail,
+  deletePackage,
   downloadPackage,
-  getPackageConfig 
-} from '../controllers/packageController.js';
+  getPackageConfig
+} from '../controllers/packageController.js'
 
 const router = new Router({
   prefix: '/packages'
-});
+})
 
 /**
  * @swagger
@@ -104,7 +104,7 @@ const router = new Router({
  *               success: false
  *               error: "获取包列表失败"
  */
-router.get('/', getPackages);
+router.get('/', getPackages)
 
 /**
  * @swagger
@@ -198,7 +198,7 @@ router.get('/', getPackages);
  *               success: false
  *               error: "获取包详情失败"
  */
-router.get('/:project/:fileName', getPackageDetail);
+router.get('/:project/:fileName', getPackageDetail)
 
 /**
  * @swagger
@@ -248,7 +248,7 @@ router.get('/:project/:fileName', getPackageDetail);
  *               success: false
  *               error: "删除包失败"
  */
-router.delete('/:project/:fileName', deletePackage);
+router.delete('/:project/:fileName', deletePackage)
 
 /**
  * @swagger
@@ -313,7 +313,7 @@ router.delete('/:project/:fileName', deletePackage);
  *               success: false
  *               error: "下载包失败"
  */
-router.get('/:project/:fileName/download', downloadPackage);
+router.get('/:project/:fileName/download', downloadPackage)
 
 /**
  * @swagger
@@ -362,6 +362,6 @@ router.get('/:project/:fileName/download', downloadPackage);
  *               success: false
  *               error: "获取配置失败"
  */
-router.get('/config', getPackageConfig);
+router.get('/config', getPackageConfig)
 
-export default router;
+export default router

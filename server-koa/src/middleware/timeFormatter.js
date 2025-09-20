@@ -1,5 +1,5 @@
 // 中文注释：统一响应时间字段格式化中间件
-import { formatTimeFieldsDeep } from '../utils/time.js';
+import { formatTimeFieldsDeep } from '../utils/time.js'
 
 /**
  * 统一格式化返回给前端的时间字段
@@ -11,23 +11,22 @@ export default function createTimeFormatter(options = {}) {
   const {
     timeZone = process.env.TIMEZONE || 'Asia/Shanghai',
     pattern = process.env.TIME_FORMAT || 'YYYY-MM-DD HH:mm:ss'
-  } = options;
+  } = options
 
   return async (ctx, next) => {
-    await next();
+    await next()
 
     // 仅处理 2xx/3xx 的 JSON 类响应
-    const body = ctx.body;
-    if (!body || typeof body !== 'object') return;
-    if (typeof body.pipe === 'function' || Buffer.isBuffer(body)) return; // 跳过流与 Buffer
+    const { body } = ctx
+    if (!body || typeof body !== 'object') return
+    if (typeof body.pipe === 'function' || Buffer.isBuffer(body)) return // 跳过流与 Buffer
 
     try {
-      formatTimeFieldsDeep(body, { timeZone, pattern });
-      ctx.body = body;
-    } catch (err) {
+      formatTimeFieldsDeep(body, { timeZone, pattern })
+      ctx.body = body
+    } catch (error) {
       // 避免格式化影响主流程
-      console.warn('时间格式化中间件警告:', err.message);
+      console.warn('时间格式化中间件警告:', error.message)
     }
-  };
+  }
 }
-

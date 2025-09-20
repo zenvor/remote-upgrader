@@ -1,42 +1,42 @@
 // 消息路由器 - 专门负责设备间消息传递和通信
-import { ErrorLogger } from '../utils/common.js';
+import { ErrorLogger } from '../utils/common.js'
 
 export class MessageRouter {
   constructor(deviceRegistry) {
-    this.deviceRegistry = deviceRegistry;
+    this.deviceRegistry = deviceRegistry
     this.messageStats = {
       sent: 0,
       failed: 0,
       broadcast: 0
-    };
+    }
   }
 
   /**
    * 发送消息到指定设备
    */
   sendToDevice(deviceId, event, data = {}) {
-    const device = this.deviceRegistry.getDevice(deviceId);
+    const device = this.deviceRegistry.getDevice(deviceId)
     if (!device) {
-      ErrorLogger.logWarning('消息发送失败', '设备不存在', { deviceId, event });
-      this.messageStats.failed++;
-      return false;
+      ErrorLogger.logWarning('消息发送失败', '设备不存在', { deviceId, event })
+      this.messageStats.failed++
+      return false
     }
 
     if (!device.socket || !device.socket.connected) {
-      ErrorLogger.logWarning('消息发送失败', 'Socket未连接', { deviceId, event });
-      this.messageStats.failed++;
-      return false;
+      ErrorLogger.logWarning('消息发送失败', 'Socket未连接', { deviceId, event })
+      this.messageStats.failed++
+      return false
     }
 
     try {
-      device.socket.emit(event, data);
-      this.messageStats.sent++;
-      console.log(`📤 消息已发送到设备 ${deviceId}: ${event}`);
-      return true;
+      device.socket.emit(event, data)
+      this.messageStats.sent++
+      console.log(`📤 消息已发送到设备 ${deviceId}: ${event}`)
+      return true
     } catch (error) {
-      ErrorLogger.logError('消息发送异常', error, { deviceId, event });
-      this.messageStats.failed++;
-      return false;
+      ErrorLogger.logError('消息发送异常', error, { deviceId, event })
+      this.messageStats.failed++
+      return false
     }
   }
 
@@ -47,60 +47,60 @@ export class MessageRouter {
     const results = {
       success: [],
       failed: []
-    };
+    }
 
     for (const deviceId of deviceIds) {
       if (this.sendToDevice(deviceId, event, data)) {
-        results.success.push(deviceId);
+        results.success.push(deviceId)
       } else {
-        results.failed.push(deviceId);
+        results.failed.push(deviceId)
       }
     }
 
-    console.log(`📤 批量消息发送完成: 成功 ${results.success.length}, 失败 ${results.failed.length}`);
-    return results;
+    console.log(`📤 批量消息发送完成: 成功 ${results.success.length}, 失败 ${results.failed.length}`)
+    return results
   }
 
   /**
    * 广播消息到所有在线设备
    */
   broadcastToAll(event, data = {}) {
-    const onlineDevices = this.deviceRegistry.getOnlineDevices();
-    const deviceIds = onlineDevices.map(d => d.deviceId);
+    const onlineDevices = this.deviceRegistry.getOnlineDevices()
+    const deviceIds = onlineDevices.map((d) => d.deviceId)
 
-    const results = this.sendToDevices(deviceIds, event, data);
-    this.messageStats.broadcast++;
+    const results = this.sendToDevices(deviceIds, event, data)
+    this.messageStats.broadcast++
 
-    console.log(`📢 广播消息: ${event}, 覆盖设备 ${results.success.length}/${deviceIds.length}`);
-    return results;
+    console.log(`📢 广播消息: ${event}, 覆盖设备 ${results.success.length}/${deviceIds.length}`)
+    return results
   }
 
   /**
    * 发送命令到设备
    */
-  sendCommand(deviceId, command, params = {}) {
+  sendCommand(deviceId, command, parameters = {}) {
     const commandData = {
       command,
-      params,
+      params: parameters,
       timestamp: new Date().toISOString(),
       messageId: this.generateMessageId()
-    };
+    }
 
-    return this.sendToDevice(deviceId, 'device:command', commandData);
+    return this.sendToDevice(deviceId, 'device:command', commandData)
   }
 
   /**
    * 批量发送命令
    */
-  sendCommandToDevices(deviceIds, command, params = {}) {
+  sendCommandToDevices(deviceIds, command, parameters = {}) {
     const commandData = {
       command,
-      params,
+      params: parameters,
       timestamp: new Date().toISOString(),
       messageId: this.generateMessageId()
-    };
+    }
 
-    return this.sendToDevices(deviceIds, 'device:command', commandData);
+    return this.sendToDevices(deviceIds, 'device:command', commandData)
   }
 
   /**
@@ -111,9 +111,9 @@ export class MessageRouter {
       ...upgradeInfo,
       timestamp: new Date().toISOString(),
       messageId: this.generateMessageId()
-    };
+    }
 
-    return this.sendToDevice(deviceId, 'cmd:upgrade', upgradeData);
+    return this.sendToDevice(deviceId, 'cmd:upgrade', upgradeData)
   }
 
   /**
@@ -124,9 +124,9 @@ export class MessageRouter {
       ...rollbackInfo,
       timestamp: new Date().toISOString(),
       messageId: this.generateMessageId()
-    };
+    }
 
-    return this.sendToDevice(deviceId, 'cmd:rollback', rollbackData);
+    return this.sendToDevice(deviceId, 'cmd:rollback', rollbackData)
   }
 
   /**
@@ -136,16 +136,16 @@ export class MessageRouter {
     const statusQuery = {
       timestamp: new Date().toISOString(),
       messageId: this.generateMessageId()
-    };
+    }
 
-    return this.sendToDevice(deviceId, 'cmd:status', statusQuery);
+    return this.sendToDevice(deviceId, 'cmd:status', statusQuery)
   }
 
   /**
    * 生成消息ID
    */
   generateMessageId() {
-    return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
   }
 
   /**
@@ -154,8 +154,8 @@ export class MessageRouter {
   getMessageStats() {
     return {
       ...this.messageStats,
-      successRate: this.messageStats.sent / (this.messageStats.sent + this.messageStats.failed) * 100
-    };
+      successRate: (this.messageStats.sent / (this.messageStats.sent + this.messageStats.failed)) * 100
+    }
   }
 
   /**
@@ -166,7 +166,7 @@ export class MessageRouter {
       sent: 0,
       failed: 0,
       broadcast: 0
-    };
+    }
   }
 
   /**
@@ -177,11 +177,11 @@ export class MessageRouter {
       type: 'connectivity_test',
       timestamp: new Date().toISOString(),
       messageId: this.generateMessageId()
-    };
+    }
 
-    const success = this.sendToDevice(deviceId, 'test:ping', testMessage);
-    console.log(`🏓 连通性测试: ${deviceId} - ${success ? '成功' : '失败'}`);
+    const success = this.sendToDevice(deviceId, 'test:ping', testMessage)
+    console.log(`🏓 连通性测试: ${deviceId} - ${success ? '成功' : '失败'}`)
 
-    return success;
+    return success
   }
 }

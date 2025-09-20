@@ -1,8 +1,8 @@
 // 中文注释：ESM 导入
-import Router from '@koa/router';
-import swaggerSpec from '../config/swagger.js';
+import Router from '@koa/router'
+import swaggerSpec from '../config/swagger.js'
 
-const router = new Router();
+const router = new Router()
 
 /**
  * API 文档主页
@@ -106,7 +106,7 @@ router.get('/', (ctx) => {
         </div>
     </body>
     </html>
-  `;
-});
+  `
+})
 
-export default router;
+export default router

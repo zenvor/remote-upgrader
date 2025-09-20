@@ -17,11 +17,7 @@ export const getPackageDetail = (project, fileName) => {
 
 // 下载包
 export const downloadPackage = (project, fileName) => {
-  return request.get(
-    `/packages/${project}/${fileName}/download`,
-    null,
-    { responseType: 'blob' }
-  )
+  return request.get(`/packages/${project}/${fileName}/download`, null, { responseType: 'blob' })
 }
 
 // 删除包

@@ -1,10 +1,10 @@
 // 中文注释：ESM 导入
-import Router from '@koa/router';
-import { getDevices, sendCommand } from '../controllers/deviceController.js';
+import Router from '@koa/router'
+import { getDevices, sendCommand } from '../controllers/deviceController.js'
 
 const router = new Router({
   prefix: '/devices'
-});
+})
 
 /**
  * @swagger
@@ -449,8 +449,7 @@ const router = new Router({
  *               success: false
  *               error: "获取设备列表失败"
  */
-router.get('/', getDevices);
-
+router.get('/', getDevices)
 
 /**
  * @swagger
@@ -543,8 +542,6 @@ router.get('/', getDevices);
  *               success: false
  *               error: "发送命令失败"
  */
-router.post('/:deviceId/command', sendCommand);
+router.post('/:deviceId/command', sendCommand)
 
-
-
-export default router;
+export default router

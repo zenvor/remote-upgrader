@@ -13,19 +13,21 @@ export const getDeviceList = (params = {}) => {
 // 获取单个设备信息（使用设备列表接口的筛选功能）
 export const getDeviceDetail = (deviceId) => {
   // 使用设备列表接口来获取单个设备信息
-  return request.get('/devices', {
-    search: deviceId,
-    pageSize: 1
-  }).then(response => {
-    if (response.devices && response.devices.length > 0) {
-      const device = response.devices[0];
-      // 只返回精确匹配的设备
-      if (device.deviceId === deviceId) {
-        return { device };
+  return request
+    .get('/devices', {
+      search: deviceId,
+      pageSize: 1
+    })
+    .then((response) => {
+      if (response.devices && response.devices.length > 0) {
+        const device = response.devices[0]
+        // 只返回精确匹配的设备
+        if (device.deviceId === deviceId) {
+          return { device }
+        }
       }
-    }
-    throw new Error('设备不存在');
-  })
+      throw new Error('设备不存在')
+    })
 }
 
 // 发送设备命令
@@ -59,4 +61,3 @@ export const restartDevice = (deviceId, service = 'all') => {
     data: { service }
   })
 }
-

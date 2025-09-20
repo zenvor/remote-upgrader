@@ -52,7 +52,9 @@
           </a-form-item>
           <a-form-item label="回滚说明">
             <div style="color: #666; font-size: 13px; line-height: 20px">
-              系统会使用 <code>agent-device/backup</code> 中的备份，将{{ getProjectLabel(formData.project) }}恢复到上一个版本，不支持选择具体版本或多级回滚。
+              系统会使用 <code>agent-device/backup</code> 中的备份，将{{
+                getProjectLabel(formData.project)
+              }}恢复到上一个版本，不支持选择具体版本或多级回滚。
             </div>
           </a-form-item>
         </a-form>
@@ -85,8 +87,8 @@ import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
 const props = defineProps({
   devices: {
     type: Array,
-    default: () => [],
-  },
+    default: () => []
+  }
 })
 
 const emit = defineEmits(['success'])
@@ -97,7 +99,7 @@ const open = defineModel('open', { type: Boolean, default: false })
 // 内部表单数据管理
 const formData = ref({
   // 仅需指定目标项目
-  project: 'frontend',
+  project: 'frontend'
 })
 
 // 回滚 API（由对话框内部直接提交）
@@ -113,15 +115,15 @@ const projectOptions = [
     label: '前端项目',
     description: 'Web 用户界面',
     color: '#3B82F6',
-    icon: CloudOutlined,
+    icon: CloudOutlined
   },
   {
     value: 'backend',
     label: '后端项目',
     description: '服务器端应用',
     color: '#10B981',
-    icon: HddOutlined,
-  },
+    icon: HddOutlined
+  }
 ]
 
 // 计算属性
@@ -135,9 +137,7 @@ const dialogTitle = computed(() => {
 })
 
 const canRollback = computed(() => {
-  return Boolean(formData.value?.project) &&
-    targetDevices.value.length > 0 &&
-    !rolling.value
+  return Boolean(formData.value?.project) && targetDevices.value.length > 0 && !rolling.value
 })
 
 // 设备状态统计
@@ -151,14 +151,14 @@ const deviceStatusSummary = computed(() => {
   return Object.entries(statusCount).map(([status, count]) => ({
     name: getStatusLabel(status),
     count,
-    color: getStatusColor(status),
+    color: getStatusColor(status)
   }))
 })
 
 // 重置表单到初始状态
 const resetForm = () => {
   formData.value = {
-    project: 'frontend',
+    project: 'frontend'
   }
 }
 
@@ -216,7 +216,7 @@ const getStatusLabel = (status) => {
     upgrading: '升级中',
     error: '错误',
     rollback_success: '回滚成功',
-    rollback_failed: '回滚失败',
+    rollback_failed: '回滚失败'
   }
   return labels[status] || status
 }
@@ -229,7 +229,7 @@ const getStatusColor = (status) => {
     upgrading: 'processing',
     error: 'error',
     rollback_success: 'success',
-    rollback_failed: 'error',
+    rollback_failed: 'error'
   }
   return colors[status] || 'default'
 }
@@ -237,11 +237,10 @@ const getStatusColor = (status) => {
 const getProjectLabel = (project) => {
   const labels = {
     frontend: '前端项目',
-    backend: '后端项目',
+    backend: '后端项目'
   }
   return labels[project] || project
 }
-
 </script>
 
 <style scoped lang="less">

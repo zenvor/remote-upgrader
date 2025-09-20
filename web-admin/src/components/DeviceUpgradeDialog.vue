@@ -57,7 +57,7 @@
               :options="
                 availablePackages.map((o) => ({
                   label: `${o.fileName} (${formatFileSize(o.fileSize)})`,
-                  value: o.fileName,
+                  value: o.fileName
                 }))
               "
               :loading="loadingPackages"
@@ -88,8 +88,6 @@
         </div>
       </a-card>
 
-
-
       <!-- 预检查结果 -->
       <a-card v-if="preCheckResult" title="预检查结果" size="small" :bordered="false" class="info-card">
         <a-alert
@@ -114,7 +112,6 @@
       </div>
     </div>
   </a-modal>
-
 </template>
 
 <script setup>
@@ -128,8 +125,8 @@ import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
 const props = defineProps({
   devices: {
     type: Array,
-    default: () => [],
-  },
+    default: () => []
+  }
 })
 
 const emit = defineEmits(['success'])
@@ -146,8 +143,8 @@ const formData = ref({
   options: {
     backup: true,
     rollbackOnFail: true,
-    restartAfterUpgrade: false,
-  },
+    restartAfterUpgrade: false
+  }
 })
 
 // 升级 API（由对话框内部直接提交）
@@ -162,14 +159,11 @@ const upgrading = ref(false)
 const preChecking = ref(false)
 const preCheckResult = ref(null)
 
-
 const resolveStoredDeployPath = (project) => {
   if (!project || targetDevices.value.length === 0) return null
   const primary = targetDevices.value[0]
   if (!primary || !primary.deviceId) return null
-  const deployPaths = primary?.deploy?.currentDeployPaths
-    || primary?.deployInfo?.deployPaths
-    || {}
+  const deployPaths = primary?.deploy?.currentDeployPaths || primary?.deployInfo?.deployPaths || {}
   const fallback = project === 'frontend' ? primary?.frontendDeployPath : primary?.backendDeployPath
 
   const candidates = [deployPaths[project], fallback]
@@ -188,15 +182,15 @@ const projectOptions = [
     label: '前端项目',
     description: 'Web 用户界面',
     color: '#3B82F6',
-    icon: CloudOutlined,
+    icon: CloudOutlined
   },
   {
     value: 'backend',
     label: '后端项目',
     description: '服务器端应用',
     color: '#10B981',
-    icon: HddOutlined,
-  },
+    icon: HddOutlined
+  }
 ]
 
 // 计算属性
@@ -216,7 +210,7 @@ const availablePackages = computed(() => {
     .filter((pkg) => pkg.project === formData.value.project)
     .map((pkg) => ({
       ...pkg,
-      displayName: `${pkg.fileName} (v${pkg.version || '未知'})`,
+      displayName: `${pkg.fileName} (v${pkg.version || '未知'})`
     }))
     .sort((a, b) => (b.fileName || '').localeCompare(a.fileName || ''))
 })
@@ -227,14 +221,8 @@ const selectedPackageInfo = computed(() => {
 })
 
 const canUpgrade = computed(() => {
-  return (
-    formData.value?.project &&
-    formData.value?.packageName &&
-    targetDevices.value.length > 0 &&
-    !upgrading.value
-  )
+  return formData.value?.project && formData.value?.packageName && targetDevices.value.length > 0 && !upgrading.value
 })
-
 
 // 设备状态统计
 const deviceStatusSummary = computed(() => {
@@ -247,7 +235,7 @@ const deviceStatusSummary = computed(() => {
   return Object.entries(statusCount).map(([status, count]) => ({
     name: getStatusLabel(status),
     count,
-    color: getStatusColor(status),
+    color: getStatusColor(status)
   }))
 })
 
@@ -302,8 +290,8 @@ const resetForm = () => {
     options: {
       backup: true,
       rollbackOnFail: true,
-      restartAfterUpgrade: false,
-    },
+      restartAfterUpgrade: false
+    }
   }
 }
 
@@ -365,14 +353,14 @@ const runPreCheck = async () => {
 
     preCheckResult.value = {
       success,
-      messages,
+      messages
     }
   } catch (error) {
     console.error('预检查失败:', error)
     toast.error('预检查失败', '错误')
     preCheckResult.value = {
       success: false,
-      messages: ['预检查失败，请重试'],
+      messages: ['预检查失败，请重试']
     }
   } finally {
     preChecking.value = false
@@ -420,16 +408,13 @@ const cancel = () => {
   open.value = false
 }
 
-
-
-
 // 工具方法
 const getStatusLabel = (status) => {
   const labels = {
     online: '在线',
     offline: '离线',
     upgrading: '升级中',
-    error: '错误',
+    error: '错误'
   }
   return labels[status] || status
 }
@@ -439,7 +424,7 @@ const getStatusSeverity = (status) => {
     online: 'success',
     offline: 'secondary',
     upgrading: 'info',
-    error: 'danger',
+    error: 'danger'
   }
   return severities[status] || 'secondary'
 }
@@ -450,7 +435,7 @@ const getStatusColor = (status) => {
     online: 'success',
     offline: 'default',
     upgrading: 'processing',
-    error: 'error',
+    error: 'error'
   }
   return colors[status] || 'default'
 }
@@ -471,7 +456,7 @@ const formatFileSize = (bytes) => {
 const getProjectLabel = (project) => {
   const labels = {
     frontend: '前端项目',
-    backend: '后端项目',
+    backend: '后端项目'
   }
   return labels[project] || project
 }

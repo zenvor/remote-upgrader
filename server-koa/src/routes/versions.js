@@ -1,10 +1,10 @@
 // 版本管理路由
-import Router from '@koa/router';
-import deviceManager from '../models/deviceManager.js';
+import Router from '@koa/router'
+import deviceManager from '../models/deviceManager.js'
 
 const router = new Router({
   prefix: '/api'
-});
+})
 
 // 测试端点 - 验证路由是否工作
 router.get('/versions/test', async (ctx) => {
@@ -12,8 +12,8 @@ router.get('/versions/test', async (ctx) => {
     success: true,
     message: '版本管理路由工作正常',
     timestamp: new Date().toISOString()
-  };
-});
+  }
+})
 
 /**
  * @swagger
@@ -78,16 +78,16 @@ router.get('/versions/test', async (ctx) => {
  */
 router.get('/versions/:deviceId/current', async (ctx) => {
   try {
-    const { deviceId } = ctx.params;
-    const { project } = ctx.query;
+    const { deviceId } = ctx.params
+    const { project } = ctx.query
 
     if (!project || !['frontend', 'backend'].includes(project)) {
-      ctx.status = 400;
+      ctx.status = 400
       ctx.body = {
         success: false,
         message: '项目类型参数无效，必须是 frontend 或 backend'
-      };
-      return;
+      }
+      return
     }
 
     // 使用导入的 deviceManager
@@ -95,38 +95,35 @@ router.get('/versions/:deviceId/current', async (ctx) => {
     // 发送获取当前版本的命令到设备
     const result = await deviceManager.sendCommand(deviceId, 'getCurrentVersion', {
       project
-    });
+    })
 
-    const response = result.data;
+    const response = result.data
 
     if (result.success && response?.success) {
       const body = {
         success: true,
         data: response.data || null,
         message: response.message || '获取当前版本成功'
-      };
+      }
 
-      ctx.body = body;
+      ctx.body = body
     } else {
-      ctx.status = 500;
+      ctx.status = 500
       ctx.body = {
         success: false,
         message: response?.message || result.error || '获取当前版本失败'
-      };
+      }
     }
-
   } catch (error) {
-    console.error('获取当前版本失败:', error, { deviceId: ctx.params.deviceId });
-    ctx.status = 500;
+    console.error('获取当前版本失败:', error, { deviceId: ctx.params.deviceId })
+    ctx.status = 500
     ctx.body = {
       success: false,
       message: '服务器内部错误',
       error: error.message
-    };
+    }
   }
-});
-
-
+})
 
 /**
  * @swagger
@@ -164,52 +161,47 @@ router.get('/versions/:deviceId/current', async (ctx) => {
  */
 router.post('/versions/:deviceId/rollback', async (ctx) => {
   try {
-    const { deviceId } = ctx.params;
-    const { project } = ctx.request.body;
+    const { deviceId } = ctx.params
+    const { project } = ctx.request.body
 
     if (!project || !['frontend', 'backend'].includes(project)) {
-      ctx.status = 400;
+      ctx.status = 400
       ctx.body = {
         success: false,
         message: '项目类型参数无效，必须是 frontend 或 backend'
-      };
-      return;
+      }
+      return
     }
 
     // 发送简单回滚命令到设备（回滚到上一版本）
     const result = await deviceManager.sendCommand(deviceId, 'cmd:rollback', {
       project
-    });
+    })
 
-    const response = result.data;
+    const response = result.data
 
     if (result.success && response?.success) {
       ctx.body = {
         success: true,
         message: response.message || '回滚到上一版本成功',
         data: response.data || null
-      };
+      }
     } else {
-      ctx.status = 500;
+      ctx.status = 500
       ctx.body = {
         success: false,
         message: response?.message || result.error || '回滚失败'
-      };
+      }
     }
-
   } catch (error) {
-    console.error('版本回滚失败:', error, { deviceId: ctx.params.deviceId });
-    ctx.status = 500;
+    console.error('版本回滚失败:', error, { deviceId: ctx.params.deviceId })
+    ctx.status = 500
     ctx.body = {
       success: false,
       message: '服务器内部错误',
       error: error.message
-    };
+    }
   }
-});
+})
 
-
-
-
-
-export default router;
+export default router

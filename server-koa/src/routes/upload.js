@@ -1,11 +1,11 @@
 // 中文注释：ESM 导入
-import Router from '@koa/router';
-import { directUpload } from '../controllers/uploadController.js';
-import upload from '../middleware/upload.js';
+import Router from '@koa/router'
+import { directUpload } from '../controllers/uploadController.js'
+import upload from '../middleware/upload.js'
 
 const router = new Router({
   prefix: '/upload'
-});
+})
 
 /**
  * @swagger
@@ -96,6 +96,6 @@ const router = new Router({
  *                   type: string
  *                   example: "上传失败: 文件处理错误"
  */
-router.post('/direct', upload.single('file'), directUpload);
+router.post('/direct', upload.single('file'), directUpload)
 
-export default router;
+export default router

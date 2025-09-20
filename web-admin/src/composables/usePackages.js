@@ -31,7 +31,7 @@ export function usePackages() {
       uploadedBy: pkg.uploadedBy || pkg.uploader || null,
       uploader: pkg.uploadedBy || pkg.uploader || null,
       deployCount: typeof pkg.deployCount === 'number' ? pkg.deployCount : 0,
-      chunkSize: typeof pkg.chunkSize === 'number' ? pkg.chunkSize : 0,
+      chunkSize: typeof pkg.chunkSize === 'number' ? pkg.chunkSize : 0
     }
   }
 
@@ -59,7 +59,7 @@ export function usePackages() {
       return {
         packages: packageList,
         total: total.value,
-        project: projectFilter,
+        project: projectFilter
       }
     } catch (error) {
       console.error('获取包列表失败:', error)
@@ -68,7 +68,7 @@ export function usePackages() {
       return {
         packages: [],
         total: 0,
-        project: projectFilter,
+        project: projectFilter
       }
     } finally {
       loading.value = false
@@ -100,7 +100,7 @@ export function usePackages() {
   const downloadPackage = async (project, fileName) => {
     try {
       const response = await packageApi.downloadPackage(project, fileName)
-      
+
       // 创建下载链接
       const url = window.URL.createObjectURL(new Blob([response]))
       const link = document.createElement('a')
@@ -108,7 +108,7 @@ export function usePackages() {
       link.setAttribute('download', fileName)
       document.body.appendChild(link)
       link.click()
-      
+
       // 清理
       window.URL.revokeObjectURL(url)
       document.body.removeChild(link)
@@ -122,12 +122,10 @@ export function usePackages() {
   const deletePackage = async (project, fileName) => {
     try {
       await packageApi.deletePackage(project, fileName)
-      
+
       // 从本地列表中移除
-      packages.value = packages.value.filter(
-        pkg => !(pkg.project === project && pkg.fileName === fileName)
-      )
-      
+      packages.value = packages.value.filter((pkg) => !(pkg.project === project && pkg.fileName === fileName))
+
       toast.success(`包 "${fileName}" 删除成功`, '删除成功')
     } catch (error) {
       console.error('删除包失败:', error)
@@ -138,20 +136,16 @@ export function usePackages() {
 
   // 批量删除包
   const batchDeletePackages = async (packageList) => {
-    const promises = packageList.map(pkg => 
-      packageApi.deletePackage(pkg.project, pkg.fileName)
-    )
+    const promises = packageList.map((pkg) => packageApi.deletePackage(pkg.project, pkg.fileName))
 
     try {
       await Promise.all(promises)
-      
+
       // 从本地列表中移除
-      packageList.forEach(pkg => {
-        packages.value = packages.value.filter(
-          p => !(p.project === pkg.project && p.fileName === pkg.fileName)
-        )
+      packageList.forEach((pkg) => {
+        packages.value = packages.value.filter((p) => !(p.project === pkg.project && p.fileName === pkg.fileName))
       })
-      
+
       toast.success(`批量删除完成，共 ${packageList.length} 个包`, '批量删除成功')
     } catch (error) {
       console.error('批量删除失败:', error)
@@ -164,7 +158,7 @@ export function usePackages() {
   const deployPackageToDevices = async (packageInfo, deviceList, options = {}) => {
     try {
       // 发送升级命令到所有目标设备
-      const upgradePromises = deviceList.map(device =>
+      const upgradePromises = deviceList.map((device) =>
         deviceApi.upgradeDevice(device.deviceId, {
           project: packageInfo.project,
           fileName: packageInfo.fileName,
@@ -181,7 +175,6 @@ export function usePackages() {
 
       // 返回部署结果
       return { deviceCount: deviceList.length }
-
     } catch (error) {
       console.error('部署包到设备失败:', error)
       toast.error(`部署失败: ${error.message}`, '部署失败')

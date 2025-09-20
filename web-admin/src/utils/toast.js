@@ -6,7 +6,9 @@ import { message as antdMessage } from 'ant-design-vue'
 
 // 兼容旧 API：不再需要实例
 export function setToastInstance() {}
-export function getToastInstance() { return null }
+export function getToastInstance() {
+  return null
+}
 
 /**
  * 显示成功消息
@@ -42,13 +44,14 @@ export function showError(message, title = '错误', life = 5000) {
 export function showCustom(options = {}) {
   const { severity = 'info', detail, summary, life = 3000 } = options
   const content = detail || summary || '消息'
-  const fn = {
-    success: antdMessage.success,
-    info: antdMessage.info,
-    warn: antdMessage.warning,
-    warning: antdMessage.warning,
-    error: antdMessage.error
-  }[severity] || antdMessage.info
+  const fn =
+    {
+      success: antdMessage.success,
+      info: antdMessage.info,
+      warn: antdMessage.warning,
+      warning: antdMessage.warning,
+      error: antdMessage.error
+    }[severity] || antdMessage.info
   fn({ content, duration: life / 1000 })
 }
 

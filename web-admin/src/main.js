@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
-import 'ant-design-vue/dist/reset.css';
+import 'ant-design-vue/dist/reset.css'
 import './style.less'
 
 import App from './App.vue'
@@ -16,10 +16,8 @@ const router = createRouter({
   routes
 })
 
-
 const app = createApp(App)
 
 app.use(router)
 // 直接挂载应用
 app.mount('#app')
-

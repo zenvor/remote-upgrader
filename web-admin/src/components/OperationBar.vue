@@ -25,7 +25,6 @@
       </div>
     </div>
   </div>
-  
 </template>
 
 <script setup>
@@ -142,5 +141,3 @@ const onRefresh = () => emit('refresh')
   }
 }
 </style>
-
-

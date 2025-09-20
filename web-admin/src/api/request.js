@@ -47,7 +47,7 @@ const errorCode = {
   503: '服务不可用',
   504: '网关超时',
   505: 'HTTP版本不受支持',
-  'default': '未知错误'
+  default: '未知错误'
 }
 
 // 统一的错误处理
@@ -105,7 +105,7 @@ const requestInterceptor = (config) => {
 // 响应拦截器
 const responseInterceptor = (response) => {
   const { responseType } = response.request
-  
+
   // 处理文件下载类响应
   if (['blob', 'arraybuffer'].includes(responseType)) {
     return response.data

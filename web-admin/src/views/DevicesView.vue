@@ -151,8 +151,12 @@
           <!-- IP 信息列 -->
           <template v-else-if="column.key === 'ip'">
             <div class="text-xs text-gray-700">
-              <div>公网: <span class="font-mono">{{ record.publicIp || '未知' }}</span></div>
-              <div>内网: <span class="font-mono">{{ record.localIp || '未知' }}</span></div>
+              <div>
+                公网: <span class="font-mono">{{ record.publicIp || '未知' }}</span>
+              </div>
+              <div>
+                内网: <span class="font-mono">{{ record.localIp || '未知' }}</span>
+              </div>
             </div>
           </template>
 
@@ -172,8 +176,13 @@
                 <RocketOutlined />
                 升级
               </a-button>
-              <a-button size="small" danger ghost @click="showDeviceRollbackDialog(record)"
-                        :disabled="!record.deploy?.capabilities?.rollbackAvailable">
+              <a-button
+                size="small"
+                danger
+                ghost
+                @click="showDeviceRollbackDialog(record)"
+                :disabled="!record.deploy?.capabilities?.rollbackAvailable"
+              >
                 <RefreshIcon />
                 回滚到上一版本
               </a-button>
@@ -201,8 +210,6 @@
       :devices="rollbackTargetDevices"
       @success="handleDialogSuccess"
     />
-
-
 
     <!-- 设备详情对话框 -->
     <a-modal
@@ -362,7 +369,9 @@
               </div>
               <div class="info-item">
                 <span class="info-label">MAC地址</span>
-                <span class="info-value">{{ selectedDevice.macAddresses?.length ? selectedDevice.macAddresses.join('、') : '未知' }}</span>
+                <span class="info-value">{{
+                  selectedDevice.macAddresses?.length ? selectedDevice.macAddresses.join('、') : '未知'
+                }}</span>
               </div>
             </div>
           </div>
@@ -428,7 +437,7 @@ import {
   RocketOutlined,
   WifiOutlined,
   ClockCircleOutlined,
-  FileTextOutlined,
+  FileTextOutlined
 } from '@ant-design/icons-vue'
 import DeviceUpgradeDialog from '@/components/DeviceUpgradeDialog.vue'
 import DeviceRollbackDialog from '@/components/DeviceRollbackDialog.vue'
@@ -446,7 +455,7 @@ const {
   fetchDevices,
   startOfflineDetection,
   stopOfflineDetection,
-  filters: filterState,
+  filters: filterState
 } = useDevices()
 
 // 分页状态
@@ -460,15 +469,19 @@ const statusOptions = [
   { value: 'online', label: '在线' },
   { value: 'offline', label: '离线' },
   { value: 'upgrading', label: '升级中' },
-  { value: 'error', label: '错误' },
+  { value: 'error', label: '错误' }
 ]
 const statusFilter = ref(filterState.value?.status || 'all')
 const searchKeyword = ref(filterState.value?.search || '')
 
-watch(filterState, (value) => {
-  statusFilter.value = value?.status || 'all'
-  searchKeyword.value = value?.search || ''
-}, { immediate: true })
+watch(
+  filterState,
+  (value) => {
+    statusFilter.value = value?.status || 'all'
+    searchKeyword.value = value?.search || ''
+  },
+  { immediate: true }
+)
 
 watch(searchKeyword, (value, oldValue) => {
   if (!value && oldValue) {
@@ -483,7 +496,7 @@ const pagination = reactive({
   total: 0,
   showSizeChanger: true,
   showQuickJumper: true,
-  showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条/共 ${total} 条`,
+  showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条/共 ${total} 条`
 })
 
 // 升级对话框状态
@@ -494,7 +507,6 @@ const upgradeTargetDevices = ref([])
 const rollbackDialogVisible = ref(false)
 const rollbackTargetDevices = ref([])
 
-
 // 设备统计
 const deviceStats = computed(() => {
   const online = onlineCount.value || devices.value.filter((d) => d.status === 'online').length
@@ -503,7 +515,6 @@ const deviceStats = computed(() => {
 
   return { online, offline, upgrading }
 })
-
 
 // 是否有选中项（基于选中 keys）
 const hasSelected = computed(() => selectedDeviceKeys.value.length > 0)
@@ -517,7 +528,7 @@ const fetchData = async (resetPage = false) => {
       status: statusFilter.value,
       search: searchValue,
       pageNum: resetPage ? 1 : pagination.current,
-      pageSize: pagination.pageSize,
+      pageSize: pagination.pageSize
     })
     pagination.current = response.pageNum
     pagination.pageSize = response.pageSize
@@ -563,7 +574,6 @@ const showBatchRollbackDialog = () => {
   rollbackDialogVisible.value = true
 }
 
-
 // 显示单个设备升级对话框
 const showDeviceUpgradeDialog = (device) => {
   upgradeTargetDevices.value = [device]
@@ -572,11 +582,10 @@ const showDeviceUpgradeDialog = (device) => {
 
 // 显示单个设备回滚对话框
 const showDeviceRollbackDialog = (device) => {
-  console.log('showDeviceRollbackDialog: ', device);
+  console.log('showDeviceRollbackDialog: ', device)
   rollbackTargetDevices.value = [device]
   rollbackDialogVisible.value = true
 }
-
 
 // 升级提交逻辑已迁移到 DeviceUpgradeDialog 内部
 
@@ -588,7 +597,7 @@ const getStatusLabel = (status) => {
     upgrading: '升级中',
     error: '错误',
     rollback_success: '回滚成功',
-    rollback_failed: '回滚失败',
+    rollback_failed: '回滚失败'
   }
   return labels[status] || status
 }
@@ -602,7 +611,7 @@ const getLogLevelClass = (level) => {
     error: 'text-red-400',
     warn: 'text-yellow-400',
     info: 'text-blue-400',
-    debug: 'text-gray-400',
+    debug: 'text-gray-400'
   }
   return classes[level] || 'text-green-400'
 }
@@ -617,7 +626,7 @@ const formatDateTime = (timestamp) => {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
+    second: '2-digit'
   })
 }
 
@@ -727,8 +736,8 @@ const devicesColumns = [
     title: '操作',
     align: 'center',
     width: 300,
-    fixed: 'right',
-  },
+    fixed: 'right'
+  }
 ]
 
 // 选择行
@@ -737,7 +746,7 @@ const rowSelection = computed(() => ({
   onChange: (keys, rows) => {
     selectedDeviceKeys.value = keys
     selectedDevices.value = rows
-  },
+  }
 }))
 
 // 分页变化
