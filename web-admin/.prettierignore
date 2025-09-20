@@ -1,0 +1,8 @@
+node_modules/
+dist/
+logs/
+*.config.cjs
+ecosystem.config.cjs
+vite.config.js
+package-lock.json
+*.log

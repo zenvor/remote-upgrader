@@ -1,0 +1,10 @@
+node_modules
+dist
+logs
+deployed
+downloads
+backup
+coverage
+tmp
+.cache
+.pnpm-store

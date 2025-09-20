@@ -1,0 +1,9 @@
+node_modules
+dist
+logs
+uploads
+public
+coverage
+tmp
+.cache
+.pnpm-store
