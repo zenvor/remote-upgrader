@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { BASE_URL } from './config'
-import { message as antdMessage } from 'ant-design-vue'
+// 仅在业务层展示消息，这里不直接引入 UI 组件，避免重复弹窗
 
 // 默认配置
 const defaultConfig = {
@@ -50,11 +50,6 @@ const errorCode = {
   'default': '未知错误'
 }
 
-// 显示错误消息
-const showErrorMessage = (msg) => {
-  antdMessage.error({ content: msg, duration: 5 })
-}
-
 // 统一的错误处理
 const errorHandler = (error) => {
   // 记录错误日志
@@ -77,7 +72,10 @@ const errorHandler = (error) => {
     // 通用错误处理：优先使用后端返回的错误信息
     const message = data?.message || data?.error || errorCode[status] || '未知错误'
     console.error('HTTP Error Message:', message)
-    showErrorMessage(message)
+    // 不在此处弹出消息，统一由业务层决定是否展示
+    // 归一化错误消息，便于业务层直接使用 error.message
+    error.message = message
+    error.friendlyMessage = message
   } else {
     // 非 HTTP 响应错误（如网络断开、超时等）
     const message = handleError(error.message)
@@ -86,7 +84,9 @@ const errorHandler = (error) => {
       handledMessage: message,
       config: error.config
     })
-    showErrorMessage(message)
+    // 同样不直接弹出，由业务层处理
+    error.message = message
+    error.friendlyMessage = message
   }
 
   return Promise.reject(error)

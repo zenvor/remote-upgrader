@@ -4,27 +4,72 @@ import toast from '@/utils/toast'
 
 export function usePackages() {
   const packages = ref([])
+  const total = ref(0)
   const selectedPackages = ref([])
   const loading = ref(false)
   const refreshing = ref(false)
   const packageDeployHistory = ref([])
   const loadingDeployHistory = ref(false)
+  const filtersState = ref({ project: 'all' })
+
+  // 统一整理包信息，避免前端反复判空
+  const normalizePackage = (pkg = {}) => {
+    const project = pkg.project || 'frontend'
+    const fileName = pkg.fileName || 'unknown-package.zip'
+    return {
+      ...pkg,
+      project,
+      fileName,
+      id: `${project}_${fileName}`,
+      fileSize: typeof pkg.fileSize === 'number' ? pkg.fileSize : 0,
+      fileMD5: pkg.fileMD5 || null,
+      packagePath: pkg.packagePath || '',
+      manifestPath: pkg.manifestPath || null,
+      manifest: pkg.manifest || null,
+      version: pkg.version || null,
+      uploadedAt: pkg.uploadedAt || null,
+      uploadedBy: pkg.uploadedBy || pkg.uploader || null,
+      uploader: pkg.uploadedBy || pkg.uploader || null,
+      deployCount: typeof pkg.deployCount === 'number' ? pkg.deployCount : 0,
+      chunkSize: typeof pkg.chunkSize === 'number' ? pkg.chunkSize : 0,
+    }
+  }
 
   // 获取包列表
-  const fetchPackages = async () => {
+  const fetchPackages = async (filters = {}) => {
     loading.value = true
     try {
-      const response = await packageApi.getPackageList()
-      // 后端保证 packages 始终为数组
-      const packageList = response.packages
-      packages.value = packageList.map(pkg => ({
-        ...pkg,
-        id: `${pkg.project}_${pkg.fileName}`
-      }))
+      const query = {}
+      const projectFilter = filters.project ?? filtersState.value.project ?? 'all'
+      if (projectFilter && projectFilter !== 'all') {
+        query.project = projectFilter
+      }
+
+      const response = await packageApi.getPackageList(query)
+
+      if (response && response.success === false) {
+        throw new Error(response.error || response.message || '获取包列表失败')
+      }
+
+      const packageList = Array.isArray(response?.packages) ? response.packages.map(normalizePackage) : []
+      packages.value = packageList
+      total.value = typeof response?.total === 'number' ? response.total : packageList.length
+      filtersState.value = { project: projectFilter }
+
+      return {
+        packages: packageList,
+        total: total.value,
+        project: projectFilter,
+      }
     } catch (error) {
       console.error('获取包列表失败:', error)
-      // 如果API调用失败，设置为空数组
+      toast.error(error.message || '获取包列表失败', '包列表')
       packages.value = []
+      return {
+        packages: [],
+        total: 0,
+        project: projectFilter,
+      }
     } finally {
       loading.value = false
     }
@@ -34,7 +79,7 @@ export function usePackages() {
   const refreshPackages = async () => {
     refreshing.value = true
     try {
-      await fetchPackages()
+      await fetchPackages({ project: filtersState.value.project })
     } finally {
       refreshing.value = false
     }
@@ -124,6 +169,7 @@ export function usePackages() {
           project: packageInfo.project,
           fileName: packageInfo.fileName,
           version: packageInfo.version,
+          fileMD5: packageInfo.fileMD5,
           deployPath: options.deployPath || undefined
         })
       )
@@ -176,11 +222,13 @@ export function usePackages() {
 
   return {
     packages,
+    total,
     selectedPackages,
     loading,
     refreshing,
     packageDeployHistory,
     loadingDeployHistory,
+    filters: filtersState,
     fetchPackages,
     refreshPackages,
     getPackageDetail,

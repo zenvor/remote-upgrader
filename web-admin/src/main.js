@@ -4,7 +4,6 @@ import 'ant-design-vue/dist/reset.css';
 import './style.less'
 
 import App from './App.vue'
-import { initRealtime } from '@/services/realtime'
 
 const routes = [
   { path: '/', redirect: '/packages' },
@@ -24,5 +23,3 @@ app.use(router)
 // 直接挂载应用
 app.mount('#app')
 
-// 初始化全局实时连接（应用启动即建立，路由切换不丢失）
-initRealtime()

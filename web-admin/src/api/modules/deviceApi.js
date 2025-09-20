@@ -10,9 +10,22 @@ export const getDeviceList = (params = {}) => {
   return request.get('/devices', params)
 }
 
-// 获取设备详细信息
+// 获取单个设备信息（使用设备列表接口的筛选功能）
 export const getDeviceDetail = (deviceId) => {
-  return request.get(`/devices/${deviceId}`)
+  // 使用设备列表接口来获取单个设备信息
+  return request.get('/devices', {
+    search: deviceId,
+    pageSize: 1
+  }).then(response => {
+    if (response.devices && response.devices.length > 0) {
+      const device = response.devices[0];
+      // 只返回精确匹配的设备
+      if (device.deviceId === deviceId) {
+        return { device };
+      }
+    }
+    throw new Error('设备不存在');
+  })
 }
 
 // 发送设备命令
@@ -31,8 +44,8 @@ export const upgradeDevice = (deviceId, upgradeData) => {
   })
 }
 
-// 回滚设备
-export const rollbackDevice = (deviceId, project = null) => {
+// 回滚设备（回退至上一个备份版本）
+export const rollbackDevice = (deviceId, project) => {
   return request.post(`/devices/${deviceId}/command`, {
     command: 'cmd:rollback',
     data: { project }
@@ -47,14 +60,3 @@ export const restartDevice = (deviceId, service = 'all') => {
   })
 }
 
-// 获取设备的原部署目录路径配置
-export const getDeviceDeployPath = (deviceId) => {
-  return request.get(`/devices/${deviceId}/deploy-path`)
-}
-
-// 设置设备的原部署目录路径配置
-export const setDeviceDeployPath = (deviceId, deployPath) => {
-  return request.post(`/devices/${deviceId}/deploy-path`, {
-    deployPath
-  })
-}

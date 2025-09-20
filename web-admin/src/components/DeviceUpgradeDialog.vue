@@ -44,11 +44,7 @@
         <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
           <a-form-item label="项目类型">
             <a-radio-group v-model:value="formData.project">
-              <a-radio-button
-                v-for="project in projectOptions"
-                :key="project.value"
-                :value="project.value"
-              >
+              <a-radio-button v-for="project in projectOptions" :key="project.value" :value="project.value">
                 <component :is="project.icon" style="margin-right: 4px" />
                 {{ project.label }}
               </a-radio-button>
@@ -58,10 +54,12 @@
           <a-form-item v-if="formData.project" label="升级包">
             <a-select
               v-model:value="formData.packageName"
-              :options="availablePackages.map(o => ({ 
-                label: `${o.fileName} (${formatFileSize(o.fileSize)})`, 
-                value: o.fileName 
-              }))"
+              :options="
+                availablePackages.map((o) => ({
+                  label: `${o.fileName} (${formatFileSize(o.fileSize)})`,
+                  value: o.fileName,
+                }))
+              "
               :loading="loadingPackages"
               placeholder="选择要部署的包"
               show-search
@@ -70,10 +68,7 @@
           </a-form-item>
 
           <a-form-item v-if="formData.packageName" label="部署路径">
-            <a-input 
-              v-model:value="formData.deployPath" 
-              placeholder="例如：/opt/frontend 或 /opt/backend"
-            />
+            <a-input v-model:value="formData.deployPath" placeholder="例如：/opt/frontend 或 /opt/backend" />
           </a-form-item>
         </a-form>
 
@@ -93,20 +88,7 @@
         </div>
       </a-card>
 
-      <!-- 升级选项 -->
-      <a-card v-if="formData.packageName" title="升级选项" size="small" :bordered="false" class="info-card">
-        <a-space direction="vertical">
-          <a-checkbox v-model:checked="formData.options.backup">
-            升级前自动备份当前版本
-          </a-checkbox>
-          <a-checkbox v-model:checked="formData.options.rollbackOnFail">
-            升级失败时自动回滚
-          </a-checkbox>
-          <a-checkbox v-model:checked="formData.options.restartAfterUpgrade">
-            升级完成后自动重启服务
-          </a-checkbox>
-        </a-space>
-      </a-card>
+
 
       <!-- 预检查结果 -->
       <a-card v-if="preCheckResult" title="预检查结果" size="small" :bordered="false" class="info-card">
@@ -124,13 +106,15 @@
       </a-card>
 
       <!-- 预检查按钮 -->
-      <div v-if="formData.project && formData.packageName && !preCheckResult" style="text-align: center; margin-top: 16px">
-        <a-button @click="runPreCheck" :loading="preChecking">
-          预检查
-        </a-button>
+      <div
+        v-if="formData.project && formData.packageName && !preCheckResult"
+        style="text-align: center; margin-top: 16px"
+      >
+        <a-button @click="runPreCheck" :loading="preChecking"> 预检查 </a-button>
       </div>
     </div>
   </a-modal>
+
 </template>
 
 <script setup>
@@ -138,26 +122,25 @@ import { ref, computed, watch } from 'vue'
 import { usePackages } from '@/composables/usePackages'
 import { useDevices } from '@/composables/useDevices'
 import toast from '@/utils/toast'
-import {
-  CloudOutlined,
-  HddOutlined
-} from '@ant-design/icons-vue'
+import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
 
 // Props
 const props = defineProps({
   devices: {
     type: Array,
-    default: () => []
+    default: () => [],
   },
 })
+
+const emit = defineEmits(['success'])
 
 // 使用 defineModel 实现 v-model:open 双向绑定
 const open = defineModel('open', { type: Boolean, default: false })
 
 // 内部表单数据管理
 const formData = ref({
-  // 业务字段：项目类型、包名、部署路径与升级选项
-  project: null,
+  // 业务字段：项目类型、包名、部署路径
+  project: 'frontend',
   packageName: null,
   deployPath: '',
   options: {
@@ -179,6 +162,25 @@ const upgrading = ref(false)
 const preChecking = ref(false)
 const preCheckResult = ref(null)
 
+
+const resolveStoredDeployPath = (project) => {
+  if (!project || targetDevices.value.length === 0) return null
+  const primary = targetDevices.value[0]
+  if (!primary || !primary.deviceId) return null
+  const deployPaths = primary?.deploy?.currentDeployPaths
+    || primary?.deployInfo?.deployPaths
+    || {}
+  const fallback = project === 'frontend' ? primary?.frontendDeployPath : primary?.backendDeployPath
+
+  const candidates = [deployPaths[project], fallback]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim()
+    }
+  }
+  return null
+}
+
 // 项目选项
 const projectOptions = [
   {
@@ -186,15 +188,15 @@ const projectOptions = [
     label: '前端项目',
     description: 'Web 用户界面',
     color: '#3B82F6',
-    icon: CloudOutlined
+    icon: CloudOutlined,
   },
   {
     value: 'backend',
     label: '后端项目',
     description: '服务器端应用',
     color: '#10B981',
-    icon: HddOutlined
-  }
+    icon: HddOutlined,
+  },
 ]
 
 // 计算属性
@@ -209,58 +211,94 @@ const dialogTitle = computed(() => {
 
 const availablePackages = computed(() => {
   if (!formData.value?.project) return []
-  
+
   return packages.value
-    .filter(pkg => pkg.project === formData.value.project)
-    .map(pkg => ({
+    .filter((pkg) => pkg.project === formData.value.project)
+    .map((pkg) => ({
       ...pkg,
-      displayName: `${pkg.fileName} (v${pkg.version || '未知'})`
+      displayName: `${pkg.fileName} (v${pkg.version || '未知'})`,
     }))
     .sort((a, b) => (b.fileName || '').localeCompare(a.fileName || ''))
 })
 
 const selectedPackageInfo = computed(() => {
   if (!formData.value?.packageName) return null
-  return availablePackages.value.find(pkg => pkg.fileName === formData.value.packageName)
+  return availablePackages.value.find((pkg) => pkg.fileName === formData.value.packageName)
 })
 
 const canUpgrade = computed(() => {
-  return formData.value?.project && 
-         formData.value?.packageName && 
-         targetDevices.value.length > 0 &&
-         !upgrading.value
+  return (
+    formData.value?.project &&
+    formData.value?.packageName &&
+    targetDevices.value.length > 0 &&
+    !upgrading.value
+  )
 })
+
 
 // 设备状态统计
 const deviceStatusSummary = computed(() => {
   const statusCount = {}
-  targetDevices.value.forEach(device => {
+  targetDevices.value.forEach((device) => {
     const status = device.status
     statusCount[status] = (statusCount[status] || 0) + 1
   })
-  
+
   return Object.entries(statusCount).map(([status, count]) => ({
     name: getStatusLabel(status),
     count,
-    color: getStatusColor(status)
+    color: getStatusColor(status),
   }))
 })
 
 // 监听项目变化，清空包选择并设置默认部署路径
-watch(() => formData.value?.project, () => {
-  if (!formData.value) return
-  formData.value.packageName = null
-  preCheckResult.value = null
-  // 为不同项目设置一个合理默认路径
-  formData.value.deployPath = formData.value.project === 'frontend' ? '/opt/frontend' : '/opt/backend'
-})
+watch(
+  () => formData.value?.project,
+  (newProject) => {
+    if (!formData.value) return
+    formData.value.packageName = null
+    preCheckResult.value = null
+    if (!newProject) {
+      formData.value.deployPath = ''
+      return
+    }
+    const storedPath = resolveStoredDeployPath(newProject)
+    // 为不同项目设置默认路径，优先使用已记录的部署路径
+    formData.value.deployPath = storedPath || (newProject === 'backend' ? '/opt/backend' : '/opt/frontend')
+  }
+)
+
+watch(
+  () => targetDevices.value,
+  (devices) => {
+    if (!devices || devices.length === 0 || !formData.value?.project) {
+      return
+    }
+    preCheckResult.value = null
+    formData.value.packageName = null
+    const storedPath = resolveStoredDeployPath(formData.value.project)
+    if (storedPath) {
+      formData.value.deployPath = storedPath
+    } else {
+      formData.value.deployPath = formData.value.project === 'backend' ? '/opt/backend' : '/opt/frontend'
+    }
+  },
+  { deep: true }
+)
+
+watch(
+  () => formData.value?.deployPath,
+  () => {
+    preCheckResult.value = null
+  }
+)
 
 // 重置表单到初始状态
 const resetForm = () => {
   formData.value = {
-    project: null,
+    project: 'frontend',
     packageName: null,
-    deployPath: '',
+    deployPath: resolveStoredDeployPath('frontend') || '/opt/frontend',
     options: {
       backup: true,
       rollbackOnFail: true,
@@ -270,50 +308,53 @@ const resetForm = () => {
 }
 
 // 监听对话框可见性，加载包列表和重置表单
-watch(() => open.value, async (visible) => {
-  if (visible) {
-    // 重置表单和状态
-    resetForm()
-    preCheckResult.value = null
-    upgrading.value = false
-    preChecking.value = false
-    
-    loadingPackages.value = true
-    try {
-      await fetchPackages()
-    } catch (error) {
-      console.error('加载包列表失败:', error)
-      toast.error('加载包列表失败', '错误')
-    } finally {
-      loadingPackages.value = false
+watch(
+  () => open.value,
+  async (visible) => {
+    if (visible) {
+      // 重置表单和状态
+      resetForm()
+      preCheckResult.value = null
+      upgrading.value = false
+      preChecking.value = false
+
+      loadingPackages.value = true
+      try {
+        await fetchPackages()
+      } catch (error) {
+        console.error('加载包列表失败:', error)
+        toast.error('加载包列表失败', '错误')
+      } finally {
+        loadingPackages.value = false
+      }
     }
   }
-})
+)
 
 // 方法
 const runPreCheck = async () => {
   if (!selectedPackageInfo.value || targetDevices.value.length === 0) return
-  
+
   preChecking.value = true
   try {
     // 模拟预检查
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+
     const messages = []
     let success = true
-    
+
     // 检查设备状态
-    const offlineDevices = targetDevices.value.filter(d => d.status !== 'online')
+    const offlineDevices = targetDevices.value.filter((d) => d.status !== 'online')
     if (offlineDevices.length > 0) {
       messages.push(`${offlineDevices.length} 个设备离线，无法升级`)
       success = false
     }
-    
+
     // 检查磁盘空间（模拟）
     const needSpace = selectedPackageInfo.value.fileSize * 2 // 需要2倍空间用于备份
     messages.push(`升级包大小: ${formatFileSize(selectedPackageInfo.value.fileSize)}`)
     messages.push(`预计需要磁盘空间: ${formatFileSize(needSpace)}`)
-    
+
     // 检查版本兼容性（模拟）
     if (Math.random() > 0.8) {
       messages.push('警告: 检测到版本兼容性问题，建议谨慎升级')
@@ -321,18 +362,17 @@ const runPreCheck = async () => {
     } else {
       messages.push('版本兼容性检查通过')
     }
-    
+
     preCheckResult.value = {
       success,
-      messages
+      messages,
     }
-    
   } catch (error) {
     console.error('预检查失败:', error)
     toast.error('预检查失败', '错误')
     preCheckResult.value = {
       success: false,
-      messages: ['预检查失败，请重试']
+      messages: ['预检查失败，请重试'],
     }
   } finally {
     preChecking.value = false
@@ -342,12 +382,18 @@ const runPreCheck = async () => {
 /** 提交升级（与 @ok 绑定） */
 const handleSubmit = async () => {
   if (!canUpgrade.value) return
-  
+
   upgrading.value = true
   try {
     const project = formData.value.project
     const packageInfo = selectedPackageInfo.value
-    const options = { ...formData.value.options, deployPath: formData.value.deployPath }
+    const options = { ...(formData.value.options || {}) }
+    const deployPath = formData.value.deployPath?.trim()
+    if (deployPath) {
+      options.deployPath = deployPath
+    } else {
+      delete options.deployPath
+    }
     const target = targetDevices.value
 
     if (target.length === 1) {
@@ -358,9 +404,9 @@ const handleSubmit = async () => {
       toast.success(`批量升级操作已启动，共 ${target.length} 个设备`, '批量升级')
     }
 
+    emit('success')
     // 关闭对话框
     open.value = false
-    
   } catch (error) {
     console.error('升级失败:', error)
     toast.error('升级操作失败', '错误')
@@ -374,23 +420,26 @@ const cancel = () => {
   open.value = false
 }
 
+
+
+
 // 工具方法
 const getStatusLabel = (status) => {
   const labels = {
-    'online': '在线',
-    'offline': '离线',
-    'upgrading': '升级中',
-    'error': '错误'
+    online: '在线',
+    offline: '离线',
+    upgrading: '升级中',
+    error: '错误',
   }
   return labels[status] || status
 }
 
 const getStatusSeverity = (status) => {
   const severities = {
-    'online': 'success',
-    'offline': 'secondary',
-    'upgrading': 'info',
-    'error': 'danger'
+    online: 'success',
+    offline: 'secondary',
+    upgrading: 'info',
+    error: 'danger',
   }
   return severities[status] || 'secondary'
 }
@@ -398,10 +447,10 @@ const getStatusSeverity = (status) => {
 // 获取状态对应的颜色
 const getStatusColor = (status) => {
   const colors = {
-    'online': 'success',
-    'offline': 'default',
-    'upgrading': 'processing',
-    'error': 'error'
+    online: 'success',
+    offline: 'default',
+    upgrading: 'processing',
+    error: 'error',
   }
   return colors[status] || 'default'
 }
@@ -419,13 +468,21 @@ const formatFileSize = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+const getProjectLabel = (project) => {
+  const labels = {
+    frontend: '前端项目',
+    backend: '后端项目',
+  }
+  return labels[project] || project
+}
+
 // no upload time display
 </script>
 
 <style scoped lang="less">
 .info-card {
   margin-bottom: 16px;
-  
+
   :deep(.ant-card-head) {
     background: #fafafa;
   }
@@ -437,17 +494,17 @@ const formatFileSize = (bytes) => {
   justify-content: space-between;
   padding: 8px 0;
   border-bottom: 1px solid #f0f0f0;
-  
+
   &:last-child {
     border-bottom: none;
   }
-  
+
   .device-info {
     .device-name {
       font-weight: 500;
       color: #262626;
     }
-    
+
     .device-id {
       font-size: 12px;
       color: #8c8c8c;

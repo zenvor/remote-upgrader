@@ -41,7 +41,7 @@
             <ServerIcon class="mr-2 text-gray-600" style="font-size: 22px" />
             <div>
               <div class="text-gray-500">总设备数</div>
-              <div class="text-xl font-semibold">{{ devices.length }}</div>
+              <div class="text-xl font-semibold">{{ total }}</div>
             </div>
           </div>
         </a-card>
@@ -59,22 +59,25 @@
         <template #title>
           <a-space align="center">
             <span>设备管理</span>
-            <a-tag :color="isConnected ? 'success' : 'error'">
-              <template #icon>
-                <a-badge :dot="true" :color="isConnected ? '#52c41a' : '#ff4d4f'" />
-              </template>
-              {{ isConnected ? '实时连接正常' : '实时连接断开' }}
-            </a-tag>
           </a-space>
         </template>
         <template #actions>
+          <a-select
+            v-model:value="statusFilter"
+            style="width: 140px"
+            :options="statusOptions"
+            @change="handleStatusChange"
+          />
+          <a-input-search
+            v-model:value="searchKeyword"
+            allow-clear
+            placeholder="搜索设备名称或ID"
+            style="width: 240px"
+            @search="handleSearch"
+          />
           <a-button type="primary" :disabled="!hasSelected" @click="showBatchUpgradeDialog">
             <UploadIcon />
             <span style="margin-left: 4px">批量升级</span>
-          </a-button>
-          <a-button @click="showBatchConfigDialog" :disabled="!canBatchConfig">
-            <SettingIcon />
-            <span style="margin-left: 4px">批量配置</span>
           </a-button>
           <a-button danger ghost @click="showBatchRollbackDialog" :disabled="!hasSelected">
             <RefreshIcon />
@@ -82,17 +85,6 @@
           </a-button>
         </template>
       </OperationBar>
-
-      <!-- 配置提醒 -->
-      <a-alert
-        v-if="devicesNeedingConfig.length > 0"
-        type="warning"
-        message="需要配置原部署目录路径"
-        :description="`${devicesNeedingConfig.length} 个设备尚未配置原部署目录路径，升级功能可能受到影响`"
-        show-icon
-        style="margin-bottom: 24px"
-      >
-      </a-alert>
 
       <!-- 设备列表 -->
       <a-table
@@ -102,7 +94,7 @@
         rowKey="deviceId"
         :rowSelection="rowSelection"
         :pagination="pagination"
-        :scroll="{ x: 1400 }"
+        :scroll="{ x: 1700 }"
         @change="handleTableChange"
       >
         <template #bodyCell="{ column, record, text }">
@@ -115,12 +107,13 @@
               />
               <div>
                 <div class="font-medium">{{ record.deviceName }}</div>
-                <div v-if="checkDeviceNeedsConfig(record)" class="flex items-center text-xs text-orange-600">
-                  <ErrorTriangleIcon class="mr-1" />
-                  需要配置部署路径
-                </div>
               </div>
             </div>
+          </template>
+
+          <!-- 设备ID列 -->
+          <template v-else-if="column.key === 'deviceId'">
+            <span class="text-xs text-gray-700 font-mono">{{ record.deviceId }}</span>
           </template>
 
           <!-- 状态列 -->
@@ -128,8 +121,23 @@
             <a-tag :color="statusColor(record.status)">{{ getStatusLabel(record.status) }}</a-tag>
           </template>
 
-          <!-- Wi‑Fi 列 -->
-          <template v-else-if="column.key === 'wifi'">
+          <!-- 版本列 -->
+          <template v-else-if="column.key === 'version'">
+            <span class="text-sm text-gray-700 font-mono">{{ record.version || '未知' }}</span>
+          </template>
+
+          <!-- 平台列 -->
+          <template v-else-if="column.key === 'platform'">
+            <div class="text-xs text-gray-700">
+              <div>{{ record.platform || '未知' }}</div>
+              <div v-if="record.osVersion || record.arch" class="text-gray-400">
+                {{ [record.osVersion, record.arch].filter(Boolean).join(' / ') }}
+              </div>
+            </div>
+          </template>
+
+          <!-- 网络信息列 -->
+          <template v-else-if="column.key === 'network'">
             <span class="text-sm text-gray-600">
               {{
                 (record.wifiName || '-') +
@@ -140,20 +148,17 @@
             </span>
           </template>
 
-          <!-- 公网IP列 -->
-          <template v-else-if="column.key === 'publicIp'">
-            <span class="text-sm text-gray-700 font-mono">
-              {{ record.publicIp || '获取中...' }}
-            </span>
+          <!-- IP 信息列 -->
+          <template v-else-if="column.key === 'ip'">
+            <div class="text-xs text-gray-700">
+              <div>公网: <span class="font-mono">{{ record.publicIp || '未知' }}</span></div>
+              <div>内网: <span class="font-mono">{{ record.localIp || '未知' }}</span></div>
+            </div>
           </template>
 
-          <!-- 版本信息列 -->
-          <template v-else-if="column.key === 'versions'">
-            <div class="text-xs text-gray-700">
-              <span>前端: {{ record.versions?.frontend || '未部署' }}</span>
-              <span class="mx-2">|</span>
-              <span>后端: {{ record.versions?.backend || '未部署' }}</span>
-            </div>
+          <!-- 最后心跳列 -->
+          <template v-else-if="column.key === 'lastHeartbeat'">
+            <span class="text-sm text-gray-600">{{ formatDateTime(record.lastHeartbeat) }}</span>
           </template>
 
           <!-- 操作列 -->
@@ -163,13 +168,14 @@
                 <EyeOutlined />
                 详情
               </a-button>
-              <a-button size="small" @click="showDeviceConfigDialog(record)">
-                <SettingIcon />
-                配置
-              </a-button>
-              <a-button :disabled="checkDeviceNeedsConfig(record)" size="small" type="primary" @click="showDeviceUpgradeDialog(record)">
+              <a-button size="small" type="primary" @click="showDeviceUpgradeDialog(record)">
                 <RocketOutlined />
                 升级
+              </a-button>
+              <a-button size="small" danger ghost @click="showDeviceRollbackDialog(record)"
+                        :disabled="!record.deploy?.capabilities?.rollbackAvailable">
+                <RefreshIcon />
+                回滚到上一版本
               </a-button>
             </a-space>
           </template>
@@ -186,14 +192,17 @@
     <DeviceUpgradeDialog
       v-model:open="upgradeDialogVisible"
       :devices="upgradeTargetDevices"
+      @success="handleDialogSuccess"
     />
 
-    <!-- 设备配置对话框 -->
-    <DeviceConfigDialog
-      v-model:open="configDialogVisible"
-      :device="configDevice"
-      @success="handleConfigSuccess"
+    <!-- 回滚对话框 -->
+    <DeviceRollbackDialog
+      v-model:open="rollbackDialogVisible"
+      :devices="rollbackTargetDevices"
+      @success="handleDialogSuccess"
     />
+
+
 
     <!-- 设备详情对话框 -->
     <a-modal
@@ -231,6 +240,14 @@
                 <span class="info-label">运行平台</span>
                 <span class="info-value">{{ selectedDevice.platform || '未知' }}</span>
               </div>
+              <div class="info-item">
+                <span class="info-label">系统版本</span>
+                <span class="info-value">{{ selectedDevice.osVersion || '未知' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">系统架构</span>
+                <span class="info-value">{{ selectedDevice.arch || '未知' }}</span>
+              </div>
             </div>
           </div>
 
@@ -241,20 +258,68 @@
             </div>
             <div class="card-content">
               <div class="info-item">
-                <span class="info-label">客户端版本</span>
-                <span class="info-value version">{{ selectedDevice.version || '未知' }}</span>
-              </div>
-              <div class="info-item">
                 <span class="info-label">前端版本</span>
-                <span class="info-value version">{{ selectedDevice.versions?.frontend || '未部署' }}</span>
-              </div>
-              <div class="info-item">
-                <span class="info-label">后端版本</span>
-                <span class="info-value version">{{ selectedDevice.versions?.backend || '未部署' }}</span>
+                <span class="info-value version">
+                  {{ selectedDevice.deployInfo?.currentVersions?.frontend?.version || '未知' }}
+                </span>
               </div>
               <div class="info-item">
                 <span class="info-label">Agent版本</span>
                 <span class="info-value version">{{ selectedDevice.agentVersion || '未知' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">前端部署路径</span>
+                <span class="info-value code">
+                  {{ selectedDevice.deployInfo?.currentVersions?.frontend?.deployPath || '未记录' }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">前端部署包</span>
+                <span class="info-value">
+                  {{ selectedDevice.deployInfo?.currentVersions?.frontend?.packageInfo?.fileName || '未知' }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">前端部署时间</span>
+                <span class="info-value">
+                  {{ formatDateTime(selectedDevice.deployInfo?.currentVersions?.frontend?.deployDate) }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">后端版本</span>
+                <span class="info-value version">
+                  {{ selectedDevice.deployInfo?.currentVersions?.backend?.version || '未知' }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">后端部署路径</span>
+                <span class="info-value code">
+                  {{ selectedDevice.deployInfo?.currentVersions?.backend?.deployPath || '未记录' }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">后端部署包</span>
+                <span class="info-value">
+                  {{ selectedDevice.deployInfo?.currentVersions?.backend?.packageInfo?.fileName || '未知' }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">后端部署时间</span>
+                <span class="info-value">
+                  {{ formatDateTime(selectedDevice.deployInfo?.currentVersions?.backend?.deployDate) }}
+                </span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">最近部署状态</span>
+                <span class="info-value">{{ selectedDevice.deployInfo?.lastDeployStatus || '未知' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">最近部署时间</span>
+                <span class="info-value">{{ formatDateTime(selectedDevice.deployInfo?.lastDeployAt) }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">最近回滚时间</span>
+                <span class="info-value">{{ formatDateTime(selectedDevice.deployInfo?.lastRollbackAt) }}</span>
               </div>
             </div>
           </div>
@@ -291,6 +356,14 @@
                 <span class="info-label">公网IP</span>
                 <span class="info-value code">{{ selectedDevice.publicIp || '获取中...' }}</span>
               </div>
+              <div class="info-item">
+                <span class="info-label">内网IP</span>
+                <span class="info-value code">{{ selectedDevice.localIp || '未知' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">MAC地址</span>
+                <span class="info-value">{{ selectedDevice.macAddresses?.length ? selectedDevice.macAddresses.join('、') : '未知' }}</span>
+              </div>
             </div>
           </div>
 
@@ -309,30 +382,12 @@
                 <span class="info-value">{{ formatDateTime(selectedDevice.lastHeartbeat) }}</span>
               </div>
               <div class="info-item">
-                <span class="info-label">在线时长</span>
-                <span class="info-value duration">{{ calculateOnlineTime(selectedDevice.connectedAt) }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 部署配置 -->
-        <div class="detail-section single">
-          <div class="detail-card deploy-info">
-            <div class="card-header">
-              <FolderOutlined class="header-icon" />
-              <h4 class="header-title">部署配置</h4>
-            </div>
-            <div class="card-content">
-              <div class="info-item path-item">
-                <span class="info-label">部署路径</span>
-                <span class="info-value path">{{ selectedDevice.deployPath || '未配置' }}</span>
+                <span class="info-label">断开时间</span>
+                <span class="info-value">{{ formatDateTime(selectedDevice.disconnectedAt) }}</span>
               </div>
               <div class="info-item">
-                <span class="info-label">配置状态</span>
-                <a-tag :color="selectedDevice.hasDeployPath ? 'success' : 'warning'" class="status-tag">
-                  {{ selectedDevice.hasDeployPath ? '已配置' : '未配置' }}
-                </a-tag>
+                <span class="info-label">在线时长</span>
+                <span class="info-value duration">{{ calculateOnlineDuration(selectedDevice) }}</span>
               </div>
             </div>
           </div>
@@ -361,25 +416,22 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 // Use TDesign table via columns config
 import {
-  WarningOutlined as ErrorTriangleIcon,
   CheckCircleOutlined as CheckCircleIcon,
   CloseCircleOutlined as CloseCircleIcon,
   UploadOutlined as UploadIcon,
   HddOutlined as ServerIcon,
   ReloadOutlined as RefreshIcon,
-  SettingOutlined as SettingIcon,
   EyeOutlined,
   RocketOutlined,
   WifiOutlined,
   ClockCircleOutlined,
-  FolderOutlined,
   FileTextOutlined,
 } from '@ant-design/icons-vue'
 import DeviceUpgradeDialog from '@/components/DeviceUpgradeDialog.vue'
-import DeviceConfigDialog from '@/components/DeviceConfigDialog.vue'
+import DeviceRollbackDialog from '@/components/DeviceRollbackDialog.vue'
 import OperationBar from '@/components/OperationBar.vue'
 import { useDevices } from '@/composables/useDevices'
 
@@ -387,15 +439,14 @@ import { useDevices } from '@/composables/useDevices'
 const {
   devices,
   total,
+  onlineCount,
   selectedDevices,
   loading,
   deviceLogs,
   fetchDevices,
   startOfflineDetection,
   stopOfflineDetection,
-  isConnected,
-  getDevicesNeedingConfig,
-  checkDeviceNeedsConfig,
+  filters: filterState,
 } = useDevices()
 
 // 分页状态
@@ -403,10 +454,32 @@ const tableLoading = ref(false)
 const deviceDetailVisible = ref(false)
 const selectedDevice = ref(null)
 
+// 筛选条件
+const statusOptions = [
+  { value: 'all', label: '全部状态' },
+  { value: 'online', label: '在线' },
+  { value: 'offline', label: '离线' },
+  { value: 'upgrading', label: '升级中' },
+  { value: 'error', label: '错误' },
+]
+const statusFilter = ref(filterState.value?.status || 'all')
+const searchKeyword = ref(filterState.value?.search || '')
+
+watch(filterState, (value) => {
+  statusFilter.value = value?.status || 'all'
+  searchKeyword.value = value?.search || ''
+}, { immediate: true })
+
+watch(searchKeyword, (value, oldValue) => {
+  if (!value && oldValue) {
+    fetchData(true)
+  }
+})
+
 // 分页配置
 const pagination = reactive({
   current: 1,
-  pageSize: 10,
+  pageSize: 20,
   total: 0,
   showSizeChanger: true,
   showQuickJumper: true,
@@ -417,44 +490,60 @@ const pagination = reactive({
 const upgradeDialogVisible = ref(false)
 const upgradeTargetDevices = ref([])
 
-// 配置对话框状态
-const configDialogVisible = ref(false)
-const configDevice = ref(null)
+// 回滚对话框状态
+const rollbackDialogVisible = ref(false)
+const rollbackTargetDevices = ref([])
+
 
 // 设备统计
 const deviceStats = computed(() => {
-  const online = devices.value.filter((d) => d.status === 'online').length
-  const offline = devices.value.filter((d) => d.status === 'offline').length
+  const online = onlineCount.value || devices.value.filter((d) => d.status === 'online').length
+  const offline = Math.max((total.value || 0) - online, 0)
   const upgrading = devices.value.filter((d) => d.status === 'upgrading').length
 
   return { online, offline, upgrading }
 })
 
-// 需要配置的设备列表
-const devicesNeedingConfig = computed(() => {
-  return getDevicesNeedingConfig()
-})
 
 // 是否有选中项（基于选中 keys）
 const hasSelected = computed(() => selectedDeviceKeys.value.length > 0)
-// 能否批量配置（存在需要配置的设备）
-const canBatchConfig = computed(() => devicesNeedingConfig.value.length > 0)
 
 // 获取设备列表
-const fetchData = async () => {
+const fetchData = async (resetPage = false) => {
+  tableLoading.value = true
   try {
-    tableLoading.value = true
-    const params = {
-      pageNum: pagination.current,
+    const searchValue = searchKeyword.value?.trim() || ''
+    const response = await fetchDevices({
+      status: statusFilter.value,
+      search: searchValue,
+      pageNum: resetPage ? 1 : pagination.current,
       pageSize: pagination.pageSize,
-    }
-    await fetchDevices(params)
+    })
+    pagination.current = response.pageNum
+    pagination.pageSize = response.pageSize
+    pagination.total = response.total
+  } catch (error) {
+    console.error('加载设备列表失败:', error)
   } finally {
     tableLoading.value = false
   }
 }
 
-fetchData()
+fetchData(true)
+
+const handleDialogSuccess = () => {
+  fetchData(false)
+}
+
+const handleStatusChange = (value) => {
+  statusFilter.value = value
+  fetchData(true)
+}
+
+const handleSearch = (value) => {
+  searchKeyword.value = value
+  fetchData(true)
+}
 
 // 显示设备详情对话框
 const showDeviceDetails = (device) => {
@@ -470,33 +559,24 @@ const showBatchUpgradeDialog = () => {
 }
 
 const showBatchRollbackDialog = () => {
-  // TODO: 显示批量回滚对话框
+  rollbackTargetDevices.value = [...selectedDevices.value]
+  rollbackDialogVisible.value = true
 }
 
-// 显示设备配置对话框
-const showDeviceConfigDialog = (device) => {
-  configDevice.value = device
-  configDialogVisible.value = true
-}
-
-// 子组件配置成功后刷新列表
-const handleConfigSuccess = async () => {
-  await fetchData()
-}
-
-// 显示批量配置对话框
-const showBatchConfigDialog = () => {
-  if (!canBatchConfig.value) return
-  // 选择第一个需要配置的设备开始
-  showDeviceConfigDialog(devicesNeedingConfig.value[0])
-}
 
 // 显示单个设备升级对话框
 const showDeviceUpgradeDialog = (device) => {
-  console.log('showDeviceUpgradeDialog: ', device);
   upgradeTargetDevices.value = [device]
   upgradeDialogVisible.value = true
 }
+
+// 显示单个设备回滚对话框
+const showDeviceRollbackDialog = (device) => {
+  console.log('showDeviceRollbackDialog: ', device);
+  rollbackTargetDevices.value = [device]
+  rollbackDialogVisible.value = true
+}
+
 
 // 升级提交逻辑已迁移到 DeviceUpgradeDialog 内部
 
@@ -507,6 +587,8 @@ const getStatusLabel = (status) => {
     offline: '离线',
     upgrading: '升级中',
     error: '错误',
+    rollback_success: '回滚成功',
+    rollback_failed: '回滚失败',
   }
   return labels[status] || status
 }
@@ -539,24 +621,34 @@ const formatDateTime = (timestamp) => {
   })
 }
 
-// 计算在线时长
-const calculateOnlineTime = (connectedAt) => {
-  if (!connectedAt) return '未知'
-  const now = new Date()
-  const connected = new Date(connectedAt)
-  const diff = now - connected
-
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+// 将秒数格式化为可读时长
+const formatDuration = (totalSeconds) => {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '未知'
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
 
   if (days > 0) {
     return `${days}天${hours}小时`
-  } else if (hours > 0) {
-    return `${hours}小时${minutes}分钟`
-  } else {
-    return `${minutes}分钟`
   }
+  if (hours > 0) {
+    return `${hours}小时${minutes}分钟`
+  }
+  return `${minutes}分钟`
+}
+
+// 计算在线时长，优先使用后台提供的 uptimeSeconds
+const calculateOnlineDuration = (device) => {
+  if (!device) return '未知'
+  if (typeof device.uptimeSeconds === 'number') {
+    return formatDuration(device.uptimeSeconds)
+  }
+  if (!device.connectedAt) return '未知'
+
+  const now = new Date()
+  const connectedTime = new Date(device.connectedAt)
+  const diffSeconds = Math.max(0, Math.floor((now.getTime() - connectedTime.getTime()) / 1000))
+  return formatDuration(diffSeconds)
 }
 
 // WiFi信号强度标签
@@ -579,36 +671,62 @@ const getWifiSignalClass = (signal) => {
 onMounted(async () => {
   // 启动离线检测
   startOfflineDetection()
+  // 启动基于 HTTP 的轮询刷新
+  if (pollingTimer) {
+    clearInterval(pollingTimer)
+  }
+  pollingTimer = setInterval(() => {
+    fetchData(false)
+  }, 5000)
 })
 
 onUnmounted(() => {
   // 停止离线检测
   stopOfflineDetection()
+  // 清理轮询定时器
+  if (pollingTimer) {
+    clearInterval(pollingTimer)
+    pollingTimer = null
+  }
 })
 
 // 格列配置与选择映射
 const selectedDeviceKeys = ref([])
+// 轮询定时器
+let pollingTimer = null
+
+watch(devices, (newDevices) => {
+  const availableKeys = newDevices.map((item) => item.deviceId)
+  const filteredKeys = selectedDeviceKeys.value.filter((key) => availableKeys.includes(key))
+  if (filteredKeys.length !== selectedDeviceKeys.value.length) {
+    selectedDeviceKeys.value = filteredKeys
+  }
+  selectedDevices.value = newDevices.filter((device) => filteredKeys.includes(device.deviceId))
+})
 
 const statusColor = (status) => {
   const s = status || 'offline'
   if (s === 'online') return 'green'
   if (s === 'upgrading') return 'blue'
   if (s === 'error') return 'red'
+  if (s === 'rollback_success') return 'green'
+  if (s === 'rollback_failed') return 'red'
   return 'default'
 }
 
 const devicesColumns = [
-  { key: 'deviceName', dataIndex: 'deviceName', title: '设备名称' },
-  { key: 'deviceId', dataIndex: 'deviceId', title: '设备ID' },
-  { key: 'status', dataIndex: 'status', title: '状态' },
-  { key: 'wifi', dataIndex: 'wifiSignal', title: 'Wi‑Fi' },
-  { key: 'publicIp', dataIndex: 'publicIp', title: '公网IP' },
-  { key: 'versions', dataIndex: 'versions', title: '版本信息' },
+  { key: 'deviceName', dataIndex: 'deviceName', title: '设备名称', width: 220, fixed: 'left' },
+  { key: 'deviceId', dataIndex: 'deviceId', title: '设备ID', width: 220 },
+  { key: 'status', dataIndex: 'status', title: '状态', width: 110 },
+  { key: 'platform', dataIndex: 'platform', title: '运行平台', width: 180 },
+  { key: 'network', dataIndex: 'wifiName', title: '网络信息', width: 220 },
+  { key: 'ip', dataIndex: 'publicIp', title: 'IP 信息', width: 240 },
+  { key: 'lastHeartbeat', dataIndex: 'lastHeartbeat', title: '最后心跳', width: 200 },
   {
     key: 'actions',
     title: '操作',
     align: 'center',
-    width: 230,
+    width: 300,
     fixed: 'right',
   },
 ]
@@ -616,14 +734,18 @@ const devicesColumns = [
 // 选择行
 const rowSelection = computed(() => ({
   selectedRowKeys: selectedDeviceKeys.value,
-  onChange: (keys) => (selectedDeviceKeys.value = keys),
+  onChange: (keys, rows) => {
+    selectedDeviceKeys.value = keys
+    selectedDevices.value = rows
+  },
 }))
 
 // 分页变化
 const handleTableChange = (pag) => {
-  pagination.current = pag.current
+  const pageSizeChanged = pag.pageSize !== pagination.pageSize
   pagination.pageSize = pag.pageSize
-  fetchData()
+  pagination.current = pageSizeChanged ? 1 : pag.current
+  fetchData(pageSizeChanged)
 }
 </script>
 
@@ -682,9 +804,6 @@ const handleTableChange = (pag) => {
 }
 .connect-info .header-icon {
   color: #13c2c2;
-}
-.deploy-info .header-icon {
-  color: #fa8c16;
 }
 .logs-info .header-icon {
   color: #595959;
@@ -752,39 +871,6 @@ const handleTableChange = (pag) => {
 .info-value.duration {
   color: #13c2c2;
   font-weight: 600;
-}
-
-.info-value.path {
-  font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 12px;
-  flex: 1;
-  text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 部署路径特殊布局 */
-.path-item {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.path-item .info-label {
-  min-width: auto;
-}
-
-.path-item .info-value {
-  width: 100%;
-  text-align: left;
-  background: #f8f8f8;
-  padding: 8px 12px;
-  border-radius: 6px;
-  border: 1px solid #e8e8e8;
-  word-break: break-all;
-  white-space: normal;
-  font-size: 13px;
 }
 
 /* 信号强度特殊样式 */

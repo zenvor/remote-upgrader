@@ -41,7 +41,8 @@ export function useUpload() {
   }
 
   // 开始上传（简化版）
-  const startUpload = async (file, project) => {
+  // 中文注释：支持可选的 version 参数
+  const startUpload = async (file, project, version) => {
     // 重置上传状态
     uploadStatus.value = {
       active: true,
@@ -63,8 +64,9 @@ export function useUpload() {
 
     try {
       const response = await uploadApi.directUpload(
-        file, 
-        project, 
+        file,
+        project,
+        version,
         (progressEvent) => {
           const now = Date.now()
           const timeDiff = (now - lastTime) / 1000 // 秒
@@ -94,9 +96,6 @@ export function useUpload() {
       // 上传成功
       uploadStatus.value.status = '上传完成'
       uploadStatus.value.active = false
-      
-      // 刷新历史记录
-      await fetchUploadHistory()
       
       // 显示成功消息
       toast.success(`文件 ${file.name} 上传成功！`, '上传成功')

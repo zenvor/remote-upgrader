@@ -48,7 +48,6 @@ const goto = (path) => router.push(path)
   color: #1f2937;
 }
 .app-main {
-  max-width: 1200px;
   margin: 0 auto;
   padding: 32px 16px;
 }

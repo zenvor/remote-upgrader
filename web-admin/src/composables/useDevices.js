@@ -1,28 +1,163 @@
 import { ref } from 'vue'
 import { deviceApi } from '@/api'
-import { initRealtime, on as realtimeOn, emit as realtimeEmit, isRealtimeConnected } from '@/services/realtime'
+// 已移除 socket.io 实时通信，统一使用 HTTP 接口刷新
 import toast from '@/utils/toast'
 
 export function useDevices() {
   const devices = ref([])
   const total = ref(0)
+  const onlineCount = ref(0)
   const selectedDevices = ref([])
   const loading = ref(false)
   const refreshing = ref(false)
   const deviceLogs = ref([])
-  // 使用全局实时连接状态
-  const isConnected = isRealtimeConnected
+  // 已移除实时连接状态，统一通过 HTTP 轮询刷新
+
+  // 设备筛选条件与分页状态
+  const filtersState = ref({
+    status: 'all',
+    search: ''
+  })
+  const paginationState = ref({
+    pageNum: 1,
+    pageSize: 20,
+    totalPages: 1
+  })
+
+  // 统一整理设备字段，方便前端展示
+  const normalizeDevice = (device = {}) => {
+    const system = device.system || {}
+    const network = device.network || {}
+    const agent = device.agent || {}
+    const storage = device.storage || {}
+    const health = device.health || {}
+    const deploy = device.deploy || {}
+    // 统一从新结构 deploy.currentDeployments 中派生路径与版本，兼容旧字段
+    const currentDeployments = deploy.currentDeployments || {}
+    const deployPaths = {
+      frontend: currentDeployments.frontend?.deployPath
+        || deploy.currentDeployPaths?.frontend
+        || device.deployPaths?.frontend
+        || null,
+      backend: currentDeployments.backend?.deployPath
+        || deploy.currentDeployPaths?.backend
+        || device.deployPaths?.backend
+        || null
+    }
+    // 生成与后端一致的 currentVersions 结构（对象形态），兼容旧字段
+    const buildVersionObj = (project) => {
+      const newD = currentDeployments?.[project] || {}
+      const oldD = deploy.currentVersions?.[project] || {}
+      return {
+        version: newD.version ?? oldD.version ?? null,
+        deployDate: newD.deployDate ?? oldD.deployDate ?? null,
+        deployPath: newD.deployPath ?? oldD.deployPath ?? null,
+        packageInfo: newD.packageInfo ?? oldD.packageInfo ?? null,
+        status: newD.status ?? oldD.status ?? null,
+        lastOperationType: newD.lastOperationType ?? oldD.lastOperationType ?? null,
+        lastOperationDate: newD.lastOperationDate ?? oldD.lastOperationDate ?? null,
+      }
+    }
+    const currentVersions = {
+      frontend: buildVersionObj('frontend'),
+      backend: buildVersionObj('backend')
+    }
+
+    return {
+      ...device,
+      deviceName: device.deviceName || device.deviceId,
+      system,
+      network,
+      agent,
+      storage,
+      health,
+      deploy,
+      hasDeployPath: typeof device.hasDeployPath === 'boolean'
+        ? device.hasDeployPath
+        : Boolean(deployPaths.frontend || deployPaths.backend),
+      version: currentVersions.frontend?.version || currentVersions.backend?.version || null,
+      platform: system.platform || null,
+      osVersion: system.osVersion || null,
+      arch: system.arch || null,
+      wifiName: network.wifiName || null,
+      wifiSignal: typeof network.wifiSignal === 'number' ? network.wifiSignal : null,
+      publicIp: network.publicIp || null,
+      localIp: network.localIp || null,
+      macAddresses: Array.isArray(network.macAddresses) ? network.macAddresses : [],
+      agentVersion: agent.agentVersion || null,
+      diskFreeBytes: typeof storage.diskFreeBytes === 'number' ? storage.diskFreeBytes : null,
+      writable: typeof storage.writable === 'boolean' ? storage.writable : null,
+      uptimeSeconds: typeof health.uptimeSeconds === 'number' ? health.uptimeSeconds : null,
+      frontendVersion: currentVersions.frontend?.version || null,
+      backendVersion: currentVersions.backend?.version || null,
+      frontendDeployPath: deployPaths.frontend || null,
+      backendDeployPath: deployPaths.backend || null,
+      deployInfo: {
+        rollbackAvailable: typeof deploy.rollbackAvailable === 'boolean' ? deploy.rollbackAvailable : null,
+        lastDeployStatus: deploy.lastDeployStatus || null,
+        lastDeployAt: deploy.lastDeployAt || null,
+        lastRollbackAt: deploy.lastRollbackAt || null,
+        deployPaths,
+        currentVersions
+      }
+    }
+  }
 
   // 获取设备列表（支持筛选参数）
   const fetchDevices = async (filters = {}) => {
     loading.value = true
     try {
-      // 将筛选参数传递给后端API
-      const response = await deviceApi.getDeviceList(filters)
-      devices.value = response.devices
-      total.value = response.total
+      // 组装查询参数，保证兼容默认值
+      const query = {
+        status: filters.status ?? filtersState.value.status ?? 'all',
+        search: filters.search ?? filtersState.value.search ?? '',
+        pageNum: filters.pageNum ?? paginationState.value.pageNum ?? 1,
+        pageSize: filters.pageSize ?? paginationState.value.pageSize ?? 20
+      }
+
+      const response = await deviceApi.getDeviceList(query)
+
+      if (response && response.success === false) {
+        throw new Error(response.error || response.message || '获取设备列表失败')
+      }
+
+      const list = Array.isArray(response?.devices) ? response.devices.map(normalizeDevice) : []
+      devices.value = list
+      total.value = typeof response?.total === 'number' ? response.total : list.length
+      onlineCount.value = typeof response?.onlineCount === 'number'
+        ? response.onlineCount
+        : list.filter(device => device.status === 'online').length
+
+      filtersState.value = {
+        status: response?.filters?.status || query.status || 'all',
+        search: response?.filters?.search || query.search || ''
+      }
+
+      const currentPageNum = typeof response?.pageNum === 'number' ? response.pageNum : query.pageNum
+      const currentPageSize = typeof response?.pageSize === 'number' ? response.pageSize : query.pageSize
+      const totalPages = typeof response?.totalPages === 'number'
+        ? response.totalPages
+        : Math.max(1, Math.ceil((total.value || 0) / currentPageSize))
+
+      paginationState.value = {
+        pageNum: currentPageNum,
+        pageSize: currentPageSize,
+        totalPages
+      }
+
+      return {
+        devices: list,
+        total: total.value,
+        onlineCount: onlineCount.value,
+        pageNum: currentPageNum,
+        pageSize: currentPageSize,
+        totalPages,
+        filters: { ...filtersState.value }
+      }
     } catch (error) {
       console.error('获取设备列表失败:', error)
+      toast.error(error.message || '获取设备列表失败', '设备列表')
+      throw error
     } finally {
       loading.value = false
     }
@@ -42,6 +177,7 @@ export function useDevices() {
         project,
         fileName: packageInfo.fileName,
         version: packageInfo.version,
+        fileMD5: packageInfo.fileMD5,
         deployPath: options.deployPath || undefined
       })
 
@@ -62,11 +198,20 @@ export function useDevices() {
   }
 
   // 回滚设备
-  const rollbackDevice = async (device, project = null) => {
+  const rollbackDevice = async (device, project) => {
     try {
       const response = await deviceApi.rollbackDevice(device.deviceId, project)
 
       if (response.success) {
+        // 更新设备状态为升级中（回滚也是一种升级操作）
+        const deviceIndex = devices.value.findIndex(d => d.deviceId === device.deviceId)
+        if (deviceIndex !== -1) {
+          devices.value[deviceIndex] = {
+            ...devices.value[deviceIndex],
+            status: 'upgrading'
+          }
+        }
+        
         toast.success(`设备 "${device.deviceName}" 回滚命令已发送`, '回滚启动')
       }
     } catch (error) {
@@ -92,7 +237,7 @@ export function useDevices() {
   }
 
   // 批量回滚
-  const batchRollback = async (deviceList, project = null) => {
+  const batchRollback = async (deviceList, project) => {
     const promises = deviceList.map(device => 
       rollbackDevice(device, project)
     )
@@ -117,174 +262,15 @@ export function useDevices() {
     }
   }
 
-  // 绑定全局 WebSocket 事件（仅一次）
+  // 绑定全局 WebSocket 事件（已移除，保留空实现以兼容调用）
   let deviceRealtimeBound = false
   const deviceRealtimeHandlers = {}
   const bindDeviceRealtimeEvents = () => {
-    if (deviceRealtimeBound) return
-    initRealtime()
-
-    deviceRealtimeHandlers.online = (data) => {
-      const deviceIndex = devices.value.findIndex(d => d.deviceId === data.deviceId)
-      if (deviceIndex !== -1) {
-        devices.value[deviceIndex] = {
-          ...devices.value[deviceIndex],
-          status: 'online',
-          lastSeen: Date.now(),
-          connectedAt: data.connectedAt || new Date().toISOString()
-        }
-      } else {
-        devices.value.push({
-          deviceId: data.deviceId,
-          deviceName: data.deviceName || data.deviceId,
-          status: 'online',
-          lastSeen: Date.now(),
-          connectedAt: data.connectedAt || new Date().toISOString(),
-          versions: data.versions || { frontend: null, backend: null },
-          upgradeProgress: null
-        })
-      }
-      toast.info(`设备 "${data.deviceName || data.deviceId}" 已上线`, '设备状态')
-    }
-
-    deviceRealtimeHandlers.statusChanged = (data) => {
-      const deviceIndex = devices.value.findIndex(d => d.deviceId === data.deviceId)
-      if (deviceIndex !== -1) {
-        devices.value[deviceIndex] = {
-          ...devices.value[deviceIndex],
-          ...data,
-          lastSeen: Date.now()
-        }
-        if (data.status === 'upgrading') {
-          toast.info(`设备 "${devices.value[deviceIndex].deviceName}" 开始升级`, '升级状态')
-        } else if (data.status === 'error') {
-          toast.error(`设备 "${devices.value[deviceIndex].deviceName}" 出现错误`, '设备错误')
-        }
-      }
-    }
-
-    deviceRealtimeHandlers.operationResult = (data) => {
-      const deviceIndex = devices.value.findIndex(d => d.deviceId === data.deviceId)
-      if (deviceIndex !== -1) {
-        const deviceName = devices.value[deviceIndex].deviceName || data.deviceId
-        if (data.operation === 'upgrade') {
-          if (data.success) {
-            devices.value[deviceIndex].status = 'online'
-            devices.value[deviceIndex].upgradeProgress = null
-            if (data.versions) {
-              devices.value[deviceIndex].versions = {
-                ...devices.value[deviceIndex].versions,
-                ...data.versions
-              }
-            }
-            toast.success(`设备 "${deviceName}" 升级完成`, '升级成功')
-          } else {
-            devices.value[deviceIndex].status = 'error'
-            devices.value[deviceIndex].upgradeProgress = null
-            toast.error(`设备 "${deviceName}" 升级失败: ${data.error || '未知错误'}`, '升级失败')
-          }
-        } else if (data.operation === 'rollback') {
-          if (data.success) {
-            devices.value[deviceIndex].status = 'online'
-            if (data.versions) {
-              devices.value[deviceIndex].versions = {
-                ...devices.value[deviceIndex].versions,
-                ...data.versions
-              }
-            }
-            toast.success(`设备 "${deviceName}" 回滚完成`, '回滚成功')
-          } else {
-            devices.value[deviceIndex].status = 'error'
-            toast.error(`设备 "${deviceName}" 回滚失败: ${data.error || '未知错误'}`, '回滚失败')
-          }
-        } else if (data.operation === 'restart') {
-          if (data.success) {
-            toast.success(`设备 "${deviceName}" 重启完成`, '重启成功')
-          } else {
-            toast.error(`设备 "${deviceName}" 重启失败: ${data.error || '未知错误'}`, '重启失败')
-          }
-        }
-      }
-    }
-
-    deviceRealtimeHandlers.deviceLog = (data) => {
-      const selectedDeviceId = getCurrentSelectedDeviceId()
-      if (data.deviceId === selectedDeviceId) {
-        deviceLogs.value.push({
-          timestamp: Date.now(),
-          level: data.level || 'info',
-          message: data.message,
-          deviceId: data.deviceId
-        })
-        if (deviceLogs.value.length > 100) {
-          deviceLogs.value = deviceLogs.value.slice(-100)
-        }
-      }
-    }
-
-    realtimeOn('device:online', deviceRealtimeHandlers.online)
-    realtimeOn('device:status_changed', deviceRealtimeHandlers.statusChanged)
-    realtimeOn('operation:result', deviceRealtimeHandlers.operationResult)
-    realtimeOn('device:log', deviceRealtimeHandlers.deviceLog)
-
-    // 网络信息更新监听
-    deviceRealtimeHandlers.networkUpdated = (data) => {
-      const deviceIndex = devices.value.findIndex(d => d.deviceId === data.deviceId)
-      if (deviceIndex !== -1) {
-        devices.value[deviceIndex] = {
-          ...devices.value[deviceIndex],
-          wifiName: data.wifiName,
-          wifiSignal: data.wifiSignal,
-          publicIp: data.publicIp
-        }
-      }
-    }
-    realtimeOn('device:network_updated', deviceRealtimeHandlers.networkUpdated)
-
-    // 设备列表变更监听 - 智能更新策略
-    deviceRealtimeHandlers.listChanged = async (data) => {
-      const { action, deviceId, deviceName, total: newTotal } = data
-      
-      // 更新总数
-      total.value = newTotal || devices.value.length
-      
-      if (action === 'add') {
-        // 新设备上线：如果当前在第一页，重新获取数据
-        const pagination = getCurrentPagination()
-        if (pagination && pagination.current === 1) {
-          console.log(`检测到新设备 ${deviceName}，当前在第一页，重新获取设备列表`)
-          await fetchDevices({ pageNum: 1, pageSize: pagination.pageSize })
-        } else {
-          console.log(`检测到新设备 ${deviceName}，但不在第一页，仅更新统计`)
-        }
-      } else if (action === 'offline') {
-        // 设备离线：标记为离线状态
-        const deviceIndex = devices.value.findIndex(d => d.deviceId === deviceId)
-        if (deviceIndex !== -1) {
-          devices.value[deviceIndex] = {
-            ...devices.value[deviceIndex],
-            status: 'offline'
-          }
-        }
-      }
-    }
-    realtimeOn('device:list_changed', deviceRealtimeHandlers.listChanged)
-
-    // 可按需补充包相关事件
-    realtimeOn('pkg:status_response', (data) => {
-      console.log('包状态响应:', data)
-    })
-    realtimeOn('pkg:ack', (data) => {
-      console.log('包分片确认:', data)
-    })
-    realtimeOn('pkg:verified', (data) => {
-      console.log('包校验结果:', data)
-    })
-
+    // 已移除实时事件绑定（HTTP 轮询替代）
     deviceRealtimeBound = true
   }
 
-  // 立即绑定全局事件（幂等）
+  // 立即绑定全局事件（空实现，不做任何事）
   bindDeviceRealtimeEvents()
 
   // 获取当前选中的设备ID（用于日志过滤）
@@ -300,28 +286,15 @@ export function useDevices() {
     return { current: 1, pageSize: 10 }
   }
 
-  // 发送 WebSocket 命令到设备（通过服务器转发）
+  // 兼容保留：已不再通过实时通信发送命令/请求状态
   const sendSocketCommand = (deviceId, command, data = {}) => {
-    if (!isRealtimeConnected.value) {
-      console.warn('WebSocket 未连接，无法发送命令')
-      toast.error('实时连接未建立，请刷新页面重试', '连接错误')
-      return false
-    }
-    const payload = { deviceId, command, data, timestamp: Date.now() }
-    realtimeEmit('device:command', payload)
-    console.log('发送设备命令:', payload)
-    return true
+    console.warn('已移除实时通信，sendSocketCommand 不再生效，请改用 HTTP 接口')
+    return false
   }
 
-  // 请求设备状态刷新
   const requestDeviceStatus = (deviceId = null) => {
-    if (!isRealtimeConnected.value) return false
-    if (deviceId) {
-      realtimeEmit('device:status_request', { deviceId })
-    } else {
-      realtimeEmit('device:status_request_all')
-    }
-    return true
+    console.warn('已移除实时通信，requestDeviceStatus 不再生效，请使用 fetchDevices() 刷新')
+    return false
   }
 
   // 检测离线设备（基于心跳超时）
@@ -402,57 +375,18 @@ export function useDevices() {
     }
   }
 
-  // 获取设备的原部署目录路径配置
-  const getDeviceDeployPath = async (deviceId) => {
-    try {
-      const response = await deviceApi.getDeviceDeployPath(deviceId)
-      return response
-    } catch (error) {
-      console.error('获取设备配置失败:', error)
-      throw error
-    }
-  }
-
-  // 设置设备的原部署目录路径配置
-  const setDeviceDeployPath = async (deviceId, deployPath) => {
-    try {
-      const response = await deviceApi.setDeviceDeployPath(deviceId, deployPath)
-      
-      // 更新本地设备列表中的配置信息
-      const deviceIndex = devices.value.findIndex(d => d.deviceId === deviceId)
-      if (deviceIndex !== -1) {
-        devices.value[deviceIndex] = {
-          ...devices.value[deviceIndex],
-          deployPath: deployPath,
-          hasDeployPath: true
-        }
-      }
-      
-      return response
-    } catch (error) {
-      console.error('设置设备配置失败:', error)
-      throw error
-    }
-  }
-
-  // 检查设备是否需要配置原部署目录路径
-  const checkDeviceNeedsConfig = (device) => {
-    return !device.deployPath && !device.hasDeployPath
-  }
-
-  // 获取需要配置原部署目录路径的设备列表
-  const getDevicesNeedingConfig = () => {
-    return devices.value.filter(device => checkDeviceNeedsConfig(device))
-  }
 
   return {
     // 响应式状态
     devices,
+    total,
+    onlineCount,
     selectedDevices,
     loading,
     refreshing,
     deviceLogs,
-    isConnected,
+    filters: filtersState,
+    pagination: paginationState,
     
     // 设备管理功能
     fetchDevices,
@@ -465,16 +399,9 @@ export function useDevices() {
     restartDevice,
     batchRestart,
     
-    // WebSocket 实时通信功能
-    sendSocketCommand,
-    requestDeviceStatus,
+    // 轮询与离线检测
     startOfflineDetection,
     stopOfflineDetection,
     
-    // 设备配置管理功能
-    getDeviceDeployPath,
-    setDeviceDeployPath,
-    checkDeviceNeedsConfig,
-    getDevicesNeedingConfig
   }
 }

@@ -41,10 +41,18 @@
       <OperationBar
         :title="'包管理'"
         :selected-count="0"
-        :total="packages.length"
+        :total="total"
         :show-total="true"
         @refresh="refreshPackages"
       >
+        <template #actions>
+          <a-select
+            v-model:value="projectFilter"
+            :options="projectOptions"
+            style="width: 160px"
+            @change="handleProjectFilterChange"
+          />
+        </template>
       </OperationBar>
 
       <!-- 上传新包 -->
@@ -88,6 +96,18 @@
               </span>
               <span v-else-if="uploadFileMD5" class="md5-text">{{ uploadFileMD5 }}</span>
               <span v-else class="text-gray-500">待计算</span>
+            </a-descriptions-item>
+            <a-descriptions-item label="版本号">
+              <a-space direction="vertical" size="small" style="width: 100%">
+                <a-input
+                  v-model:value="uploadVersion"
+                  placeholder="可选：例如 v1.2.3"
+                  style="width: 200px"
+                  @blur="validateVersion"
+                />
+                <div v-if="versionError" style="color:#ff4d4f;font-size:12px;">{{ versionError }}</div>
+                <div v-else class="text-gray-500" style="font-size:12px;">留空则尝试从文件名提取，否则为 unknown</div>
+              </a-space>
             </a-descriptions-item>
           </a-descriptions>
           
@@ -143,7 +163,7 @@
           :columns="pkgColumnsAntd"
           :loading="loading"
           rowKey="id"
-          :pagination="{ pageSize: 20, pageSizeOptions: ['10','20','50'], showSizeChanger: true, showQuickJumper: true }"
+          :pagination="false"
           size="small"
         >
           <!-- 在表格内部渲染操作列 -->
@@ -154,16 +174,12 @@
                   <EyeOutlined />
                   详情
                 </a-button>
-                <a-button size="small" @click="downloadPackage(record)">
-                  <DownloadOutlined />
-                  下载
-                </a-button>
                 <a-button size="small" danger @click="deletePackage(record)">
                   <DeleteOutlined />
                   删除
                 </a-button>
               </a-space>
-            </template>
+          </template>
           </template>
         </a-table>
       </a-card>
@@ -197,35 +213,50 @@
                   <span>{{ formatFileSize(selectedPackage.fileSize) }}</span>
                 </a-space>
                 <a-space align="center" style="width: 100%; justify-content: space-between;">
+                  <span class="text-gray-500">版本</span>
+                  <span>{{ selectedPackage.version || '未知版本' }}</span>
+                </a-space>
+                <a-space align="center" style="width: 100%; justify-content: space-between;">
+                  <span class="text-gray-500">上传时间</span>
+                  <span>{{ formatDate(selectedPackage.uploadedAt) }}</span>
+                </a-space>
+                <a-space align="center" style="width: 100%; justify-content: space-between;">
                   <span class="text-gray-500">上传者</span>
                   <span>{{ selectedPackage.uploader || '未知' }}</span>
                 </a-space>
               </a-space>
             </a-card>
           </a-col>
-          
+
+          <a-col :span="12">
+            <a-card title="存储信息">
+              <a-space direction="vertical" size="small" style="width: 100%">
+                <a-space align="start" style="width: 100%; justify-content: space-between;">
+                  <span class="text-gray-500">包路径</span>
+                  <span class="font-mono text-xs text-gray-600" style="max-width: 220px; word-break: break-all; text-align: right;">
+                    {{ selectedPackage.packagePath || '未知' }}
+                  </span>
+                </a-space>
+                <a-space align="start" style="width: 100%; justify-content: space-between;">
+                  <span class="text-gray-500">Manifest 路径</span>
+                  <span class="font-mono text-xs text-gray-600" style="max-width: 220px; word-break: break-all; text-align: right;">
+                    {{ selectedPackage.manifestPath || '无' }}
+                  </span>
+                </a-space>
+              </a-space>
+            </a-card>
+          </a-col>
+        </a-row>
+
+        <a-row :gutter="16">
           <a-col :span="12">
             <a-card title="完整性信息">
               <a-space direction="vertical" size="small" style="width: 100%">
                 <a-space align="start" style="width: 100%; justify-content: space-between;">
-                  <span class="text-gray-500">MD5校验</span>
-                  <a-tag style="font-family: monospace; font-size: 12px; word-break: break-all; max-width: 200px">
-                    {{ selectedPackage.fileMD5 }}
-                  </a-tag>
-                </a-space>
-                <a-space v-if="selectedPackage.fileSHA256" align="start" style="width: 100%; justify-content: space-between;">
-                  <span class="text-gray-500">SHA256</span>
-                  <a-tag style="font-family: monospace; font-size: 12px; word-break: break-all; max-width: 200px">
-                    {{ selectedPackage.fileSHA256 }}
-                  </a-tag>
-                </a-space>
-                <a-space align="center" style="width: 100%; justify-content: space-between;">
-                  <span class="text-gray-500">分片数量</span>
-                  <span>{{ selectedPackage.totalChunks || '未知' }}</span>
-                </a-space>
-                <a-space align="center" style="width: 100%; justify-content: space-between;">
-                  <span class="text-gray-500">分片大小</span>
-                  <span>{{ formatFileSize(selectedPackage.chunkSize || 0) }}</span>
+                  <span class="text-gray-500">MD5 校验</span>
+                  <span class="md5-display">
+                    {{ selectedPackage.fileMD5 || '无' }}
+                  </span>
                 </a-space>
               </a-space>
             </a-card>
@@ -242,22 +273,11 @@
           />
         </a-card>
 
-        <!-- 部署历史 -->
-        <a-card title="部署历史">
-          <a-table
-            :dataSource="packageDeployHistory"
-            :columns="deployHistoryColumns"
-            :loading="loadingDeployHistory"
-            size="small"
-            rowKey="deviceId"
-            :pagination="packageDeployHistory.length > 10 ? { pageSize: 10 } : false"
-          />
-        </a-card>
+        
       </a-space>
 
       <template #footer>
         <a-space>
-          <a-button @click="downloadPackage(selectedPackage)"><DownloadOutlined /> 下载</a-button>
           <a-button @click="packageDetailVisible = false">关闭</a-button>
         </a-space>
       </template>
@@ -273,12 +293,11 @@ import { Modal } from 'ant-design-vue'
 import { usePackages } from '@/composables/usePackages'
 import { useUpload } from '@/composables/useUpload'
 import toast from '@/utils/toast'
-import { 
+import {
   UploadOutlined,
   CloseOutlined,
   CloudOutlined,
   HddOutlined,
-  DownloadOutlined,
   InboxOutlined,
   EyeOutlined,
   DeleteOutlined
@@ -288,13 +307,24 @@ import OperationBar from '@/components/OperationBar.vue'
 // 数据状态
 const {
   packages,
+  total,
+  filters,
   loading,
-  packageDeployHistory,
-  loadingDeployHistory,
   fetchPackages,
-  deletePackage: deletePackageAPI,
-  getPackageDeployHistory
+  deletePackage: deletePackageAPI
 } = usePackages()
+
+// 项目筛选
+const projectOptions = [
+  { label: '全部项目', value: 'all' },
+  { label: '前端项目', value: 'frontend' },
+  { label: '后端项目', value: 'backend' }
+]
+const projectFilter = ref(filters.value?.project || 'all')
+
+watch(filters, (value) => {
+  projectFilter.value = value?.project || 'all'
+}, { immediate: true })
 
 // 已移除：筛选功能
 // 移除基于上传时间的视图模式
@@ -317,7 +347,16 @@ const packageStats = computed(() => {
 
 // 方法
 const refreshPackages = async () => {
-  await fetchPackages()
+  try {
+    await fetchPackages({ project: projectFilter.value })
+  } catch (error) {
+    console.error('刷新包列表失败:', error)
+  }
+}
+
+const handleProjectFilterChange = async (value) => {
+  projectFilter.value = value
+  await refreshPackages()
 }
 // 已移除：查询与重置逻辑
 
@@ -327,6 +366,20 @@ const uploadSelectedFile = ref(null)
 const uploadProject = ref(null)
 const uploadFileMD5 = ref(null)
 const uploading = ref(false)
+// 中文注释：版本号输入与校验状态
+const uploadVersion = ref('')
+const versionError = ref('')
+const versionPattern = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
+const validateVersion = () => {
+  if (!uploadVersion.value) { versionError.value = ''; return true }
+  if (!versionPattern.test(uploadVersion.value.trim())) {
+    versionError.value = '版本号不合法，示例：v1.2.3 或 1.2.3[-beta][+build]'
+    return false
+  }
+  versionError.value = ''
+  return true
+}
 
 // 进度条显示控制
 const showProgress = ref(false)
@@ -352,7 +405,8 @@ const uploadProjectOptions = [
 // 已移除分片相关常量
 
 const canStartUpload = computed(() => {
-  return uploadSelectedFile.value && uploadProject.value && !uploading.value
+  const versionOk = !uploadVersion.value || versionPattern.test(uploadVersion.value.trim())
+  return uploadSelectedFile.value && uploadProject.value && versionOk && !uploading.value
 })
 
 const uploadProgress = computed(() => {
@@ -406,6 +460,8 @@ const clearUploadSelectedFile = () => {
   uploadSelectedFile.value = null
   uploadFileMD5.value = null
   uploadProject.value = null
+  uploadVersion.value = ''
+  versionError.value = ''
   fileList.value = []
   // 重置进度显示状态
   showProgress.value = false
@@ -431,7 +487,12 @@ const handleUploadStart = async () => {
   if (!canStartUpload.value) return
   uploading.value = true
   try {
-    await startUpload(uploadSelectedFile.value, uploadProject.value)
+    // 中文注释：将用户输入的版本（若有）一并传递给后端
+    await startUpload(
+      uploadSelectedFile.value,
+      uploadProject.value,
+      uploadVersion.value && uploadVersion.value.trim() ? uploadVersion.value.trim() : undefined
+    )
     // 上传成功后清理文件选择
     clearUploadSelectedFile()
   } catch (error) {
@@ -453,15 +514,15 @@ watch(uploadStatus, async (val, oldVal) => {
     }, 300)
   }
   
-  // 当上传完成时，确保最小显示时间
-  if (!val.active && (val.status === '已完成' || val.status === '秒传完成')) {
+  // 当上传完成时，确保最小显示时间（兼容不同状态文案）
+  if (!val.active && (['上传完成', '已完成', '秒传完成'].includes(val.status))) {
     const elapsedTime = Date.now() - (progressStartTime.value || 0)
     const remainingTime = Math.max(0, MIN_PROGRESS_DISPLAY_TIME - elapsedTime)
     
     // 如果显示时间不足最小时间，延迟隐藏
     setTimeout(() => {
       showProgress.value = false
-      fetchPackages()
+      refreshPackages()
     }, remainingTime)
   }
   
@@ -474,23 +535,8 @@ watch(uploadStatus, async (val, oldVal) => {
 const showPackageDetails = async (pkg) => {
   selectedPackage.value = pkg
   packageDetailVisible.value = true
-  
-  // 获取部署历史
-  await getPackageDeployHistory(pkg.project, pkg.fileName)
 }
 
-const downloadPackage = (pkg) => {
-  const url = `/api/packages/${pkg.project}/${pkg.fileName}/download`
-  window.open(url, '_blank')
-}
-
-
-const deployHistoryColumns = [
-  { key: 'deviceName', dataIndex: 'deviceName', title: '设备名称' },
-  { key: 'deployTime', dataIndex: 'deployTime', title: '部署时间', customRender: ({ record }) => formatDate(record.deployTime) },
-  { key: 'status', dataIndex: 'status', title: '状态', customRender: ({ record }) => h('a-tag', { color: record.status === 'success' ? 'green' : 'red' }, () => record.status) },
-  { key: 'deployer', dataIndex: 'deployer', title: '操作者' }
-]
 
 // AntD 表格列配置
 const pkgColumnsAntd = [
@@ -499,8 +545,8 @@ const pkgColumnsAntd = [
     dataIndex: 'fileName',
     title: '包名称',
     customRender: ({ record }) => h('div', { class: 'flex items-center space-x-3' }, [
-      h(record.project === 'frontend' ? CloudOutlined : (record.project === 'backend' ? HddOutlined : CloudOutlined), { 
-        class: record.project === 'frontend' ? 'text-lg text-blue-600' : (record.project === 'backend' ? 'text-lg text-green-600' : 'text-lg text-gray-600')
+      h(record.project === 'backend' ? HddOutlined : CloudOutlined, {
+        class: record.project === 'backend' ? 'text-lg text-green-600' : 'text-lg text-blue-600'
       }),
       h('div', null, [
         h('div', { class: 'font-medium text-gray-900' }, record.fileName),
@@ -513,12 +559,9 @@ const pkgColumnsAntd = [
     dataIndex: 'project',
     title: '项目',
     customRender: ({ record }) => {
-      // 调试：打印record数据结构
-      console.log('Package record:', record)
-      if (!record.project) {
-        return h('a-tag', { color: 'default' }, () => '未分类')
-      }
-      return h('a-tag', { color: record.project === 'frontend' ? 'blue' : 'green' }, () => getProjectLabel(record.project))
+      const color = record.project === 'frontend' ? 'blue' : 'green'
+      const label = getProjectLabel(record.project)
+      return h('a-tag', { color }, label)
     }
   },
   {
@@ -528,22 +571,28 @@ const pkgColumnsAntd = [
     customRender: ({ record }) => formatFileSize(record.fileSize)
   },
   {
+    key: 'uploadedAt',
+    dataIndex: 'uploadedAt',
+    title: '上传时间',
+    customRender: ({ record }) => formatDate(record.uploadedAt)
+  },
+  {
     key: 'fileMD5',
     dataIndex: 'fileMD5',
     title: 'MD5校验',
-    customRender: ({ record }) => h('div', { class: 'font-mono text-xs text-gray-600 max-w-32 truncate', title: record.fileMD5 }, record.fileMD5)
+    customRender: ({ record }) => h('div', { class: 'font-mono text-xs text-gray-600 max-w-40 truncate', title: record.fileMD5 || '-' }, record.fileMD5 || '-')
   },
   {
-    key: 'deployCount',
-    dataIndex: 'deployCount',
-    title: '部署次数',
-    customRender: ({ record }) => h('span', { class: 'text-lg font-bold text-blue-600' }, record.deployCount || 0)
+    key: 'packagePath',
+    dataIndex: 'packagePath',
+    title: '存储路径',
+    customRender: ({ record }) => h('div', { class: 'font-mono text-xs text-gray-600 max-w-56 truncate', title: record.packagePath || '-' }, record.packagePath || '-')
   },
   {
     key: 'actions',
     title: '操作',
-    width: 240,
-    // 操作列改由表格内部插槽渲染
+    align: 'center',
+    width: 160,
   }
 ]
 
@@ -577,12 +626,22 @@ const getProjectLabel = (project) => {
 // 格式化函数已移至 useUpload 中
 
 const formatDate = (timestamp) => {
-  return new Date(timestamp).toLocaleString('zh-CN')
+  if (!timestamp) return '未知'
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return '未知'
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
 // 生命周期
 onMounted(() => {
-  fetchPackages()
+  refreshPackages()
 })
 </script>
 
@@ -667,5 +726,18 @@ onMounted(() => {
 
 .text-gray-500 {
   color: #8c8c8c;
+}
+
+.md5-display {
+  font-family: 'Courier New', Consolas, Monaco, monospace;
+  font-size: 12px;
+  color: #52c41a;
+  background-color: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 4px;
+  padding: 4px 8px;
+  max-width: 220px;
+  word-break: break-all;
+  line-height: 1.4;
 }
 </style>

@@ -5,11 +5,15 @@ import request from '../request'
  * 使用直接上传替代复杂的分片上传
  */
 
-// 直接上传文件
-export const directUpload = (file, project, onProgress, abortController = null) => {
+// 直接上传文件（可选传入 version）
+export const directUpload = (file, project, version, onProgress, abortController = null) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('project', project)
+  // 中文注释：仅当用户填写版本号时才附加，避免影响兼容性
+  if (version) {
+    formData.append('version', version)
+  }
 
   const config = {
     headers: {
