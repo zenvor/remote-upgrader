@@ -7,6 +7,11 @@
     "start": "node src/app.js",
     "dev": "node src/app.js",
     "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "xo",
+    "lint:fix": "xo --fix",
+    "ci:lint": "xo --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prestart:pm2": "mkdir -p logs",
     "start:pm2": "pm2 start ecosystem.config.cjs",
     "start:prod": "pm2 start ecosystem.config.cjs --env production",
@@ -20,6 +25,9 @@
     "status": "pm2 status",
     "monitor": "pm2 monit",
     "reset-config": "node ./scripts/reset-config.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "keywords": [],
   "author": "",
@@ -37,10 +45,13 @@
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0",
     "koa2-swagger-ui": "^5.11.0",
+    "prettier": "^3.6.2",
     "socket.io": "^4.8.1",
     "swagger-jsdoc": "^6.2.8"
   },
   "devDependencies": {
-    "pm2": "^5.3.0"
+    "globals": "^16.4.0",
+    "pm2": "^5.3.0",
+    "xo": "^1.2.2"
   }
 }

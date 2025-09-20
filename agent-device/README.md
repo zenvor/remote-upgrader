@@ -40,14 +40,14 @@ npm start
 
 ### 环境变量
 
-| 变量名 | 默认值 | 说明 |
-|-------|--------|------|
-| `SERVER_URL` | `http://localhost:3000` | 升级服务器地址 |
-| `DEVICE_ID` | `device-{timestamp}` | 设备唯一标识 |
-| `DEVICE_NAME` | `测试设备` | 设备显示名称 |
-| `DEVICE_TYPE` | `web-terminal` | 设备类型 |
-| `DEVICE_VERSION` | `1.0.0` | 设备软件版本 |
-| `LOG_LEVEL` | `info` | 日志级别 |
+| 变量名           | 默认值                  | 说明           |
+| ---------------- | ----------------------- | -------------- |
+| `SERVER_URL`     | `http://localhost:3000` | 升级服务器地址 |
+| `DEVICE_ID`      | `device-{timestamp}`    | 设备唯一标识   |
+| `DEVICE_NAME`    | `测试设备`              | 设备显示名称   |
+| `DEVICE_TYPE`    | `web-terminal`          | 设备类型       |
+| `DEVICE_VERSION` | `1.0.0`                 | 设备软件版本   |
+| `LOG_LEVEL`      | `info`                  | 日志级别       |
 
 ### 配置文件
 
@@ -79,6 +79,7 @@ npm start
 支持以下远程命令：
 
 #### 升级命令 (cmd:upgrade)
+
 ```javascript
 {
   command: "cmd:upgrade",
@@ -95,9 +96,10 @@ npm start
 ```
 
 #### 回滚命令 (cmd:rollback)
+
 ```javascript
 {
-  command: "cmd:rollback", 
+  command: "cmd:rollback",
   data: {
     project: "frontend|backend"
   }
@@ -107,6 +109,7 @@ npm start
 说明：设备端仅支持回滚到上一份备份版本，命令无需指定目标版本。
 
 #### 状态查询 (cmd:status)
+
 ```javascript
 {
   command: "cmd:status",
@@ -188,7 +191,7 @@ curl -X POST http://localhost:3000/devices/device-001/command \
   -d '{
     "command": "cmd:upgrade",
     "data": {
-      "project": "frontend", 
+      "project": "frontend",
       "fileName": "app-v1.2.0.zip",
       "version": "1.2.0"
     }
@@ -206,16 +209,19 @@ curl -X POST http://localhost:3000/devices/device-001/command \
 ### 常见问题
 
 **连接失败**
+
 - 检查服务器地址和端口是否正确
 - 确认网络连接正常
 - 查看服务器是否正在运行
 
 **下载失败**
+
 - 检查存储空间是否充足
 - 确认网络稳定性
 - 查看包文件是否存在于服务器
 
 **部署失败**
+
 - 检查文件权限
 - 确认解压工具可用（unzip、tar）
 - 查看目标目录是否可写

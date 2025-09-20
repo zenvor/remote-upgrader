@@ -50,25 +50,25 @@ node test-direct-upload.js
 
 ### 上传管理 (Upload)
 
-| 接口 | 方法 | 描述 |
-|------|------|------|
+| 接口             | 方法 | 描述                                    |
+| ---------------- | ---- | --------------------------------------- |
 | `/upload/direct` | POST | 直接上传文件（表单字段：file, project） |
 
 ### 包管理 (Packages)
 
-| 接口 | 方法 | 描述 |
-|------|------|------|
-| `/packages` | GET | 获取包列表 |
-| `/packages/:project/:fileName` | GET | 获取包详情 |
-| `/packages/:project/:fileName` | DELETE | 删除包 |
-| `/packages/:project/:fileName/download` | GET | 下载包 |
+| 接口                                    | 方法   | 描述       |
+| --------------------------------------- | ------ | ---------- |
+| `/packages`                             | GET    | 获取包列表 |
+| `/packages/:project/:fileName`          | GET    | 获取包详情 |
+| `/packages/:project/:fileName`          | DELETE | 删除包     |
+| `/packages/:project/:fileName/download` | GET    | 下载包     |
 
 ### 设备管理 (Devices)
 
-| 接口 | 方法 | 描述 |
-|------|------|------|
-| `/devices` | GET | 获取设备列表 |
-| `/devices/:deviceId` | GET | 获取设备详情 |
+| 接口                         | 方法 | 描述           |
+| ---------------------------- | ---- | -------------- |
+| `/devices`                   | GET  | 获取设备列表   |
+| `/devices/:deviceId`         | GET  | 获取设备详情   |
 | `/devices/:deviceId/command` | POST | 向设备发送命令 |
 
 ## 🔧 核心特性
@@ -181,16 +181,16 @@ cp -r ../web-admin/dist/* ./public/
 
 ```javascript
 // 浏览器环境示例
-const formData = new FormData();
-formData.append('file', fileInput.files[0]);
-formData.append('project', 'frontend');
+const formData = new FormData()
+formData.append('file', fileInput.files[0])
+formData.append('project', 'frontend')
 
 const res = await fetch('/upload/direct', {
   method: 'POST',
   body: formData
-});
-const data = await res.json();
-console.log(data);
+})
+const data = await res.json()
+console.log(data)
 ```
 
 ### 3. 设备命令示例
@@ -203,7 +203,7 @@ await axios.post('/devices/device-001/command', {
     project: 'frontend',
     fileName: 'app-v1.0.0.zip'
   }
-});
+})
 
 // 发送降级命令
 await axios.post('/devices/device-001/command', {
@@ -211,7 +211,7 @@ await axios.post('/devices/device-001/command', {
   data: {
     project: 'frontend'
   }
-});
+})
 ```
 
 ## 🔍 监控和日志

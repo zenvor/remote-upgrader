@@ -68,7 +68,7 @@ npm run preview
 - **PrimeVue**：丰富的UI组件库
 - **TailwindCSS**：实用优先的CSS框架
 - **Axios**：HTTP客户端
-// 已移除 Socket.IO，统一通过 HTTP 接口刷新数据
+  // 已移除 Socket.IO，统一通过 HTTP 接口刷新数据
 
 ## 📁 项目结构
 
@@ -97,7 +97,7 @@ web-admin/
 默认API地址为 `http://localhost:3000`，可在以下文件中修改：
 
 - `src/composables/useUpload.js`
-- `src/composables/useDevices.js`  
+- `src/composables/useDevices.js`
 - `src/composables/usePackages.js`
 
 ### PrimeVue主题
@@ -113,18 +113,22 @@ web-admin/
 前端与后端Koa服务进行交互，主要API包括：
 
 ### 上传 API
+
 - `POST /upload/direct` - 直接上传（表单字段：file, project）
 
-### 设备管理  
+### 设备管理
+
 - `GET /devices` - 获取设备列表
 - `POST /devices/:id/command` - 发送设备命令
 
 ### 包管理
+
 - `GET /packages` - 获取包列表
 - `DELETE /packages/:project/:fileName` - 删除包
 - `POST /dispatch/init` - 初始化包分发
 
 ### 设备升级命令（前端发送到后端，再由后端转发到设备）
+
 - `POST /devices/:id/command`，命令为 `cmd:upgrade`，数据结构：
   - `project`: `frontend` | `backend`
   - `fileName`: 升级包文件名
@@ -132,6 +136,7 @@ web-admin/
   - `deployPath`: 设备端部署目录（可选；若不传，则设备端可使用默认值或拒绝执行）
 
 ### WebSocket事件
+
 - `device:status` - 设备状态变化
 - `device:online/offline` - 设备上下线
 - `upgrade:progress` - 升级进度更新
