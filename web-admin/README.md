@@ -68,7 +68,7 @@ npm run preview
 - **PrimeVue**：丰富的UI组件库
 - **TailwindCSS**：实用优先的CSS框架
 - **Axios**：HTTP客户端
-- **Socket.IO Client**：实时通信
+// 已移除 Socket.IO，统一通过 HTTP 接口刷新数据
 
 ## 📁 项目结构
 

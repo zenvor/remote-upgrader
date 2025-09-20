@@ -1,9 +1,0 @@
-{
-  "deviceId": "device-machine-bd8fbbfd77d2",
-  "method": "machine-uuid",
-  "rawValue": "5631913c8991acc8576beb96416e4b55444488ac97e79de3daa4333e9bdd42ef",
-  "generatedAt": "2025-09-09T09:26:28.966Z",
-  "hostname": "ClaudedeMacBook-Air.local",
-  "platform": "darwin",
-  "arch": "arm64"
-}
