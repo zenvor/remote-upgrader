@@ -7,7 +7,20 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node src/app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prestart:pm2": "node -e \"require('fs').mkdirSync('logs',{recursive:true})\"",
+    "start:pm2": "pm2 start ecosystem.config.cjs",
+    "start:prod": "pm2 start ecosystem.config.cjs --env production",
+    "restart:pm2": "pm2 restart ecosystem.config.cjs",
+    "restart:prod": "pm2 restart ecosystem.config.cjs --env production",
+    "stop:pm2": "pm2 stop ecosystem.config.cjs",
+    "delete:pm2": "pm2 delete ecosystem.config.cjs",
+    "deploy:prod": "node ./scripts/deploy-prod.js",
+    "redeploy:prod": "npm install && pm2 restart ecosystem.config.cjs --env production",
+    "logs": "pm2 logs device-agent",
+    "status": "pm2 status",
+    "monitor": "pm2 monit",
+    "reset-config": "node ./scripts/reset-config.js"
   },
   "keywords": [
     "remote-upgrade",
@@ -18,10 +31,14 @@
   "dependencies": {
     "adm-zip": "^0.5.16",
     "axios": "^1.11.0",
+    "dotenv": "^17.2.2",
     "fs-extra": "^11.3.1",
     "js-yaml": "^4.1.0",
     "node-machine-id": "^1.1.12",
     "socket.io-client": "^4.8.1",
     "systeminformation": "^5.27.8"
+  },
+  "devDependencies": {
+    "pm2": "^5.3.0"
   }
 }

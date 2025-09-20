@@ -167,10 +167,13 @@ server-koa/uploads/*
 
 # Config files with sensitive data
 server-koa/config/devices.json
-agent-device/config/device-id.json
+agent-device/config/device-info.json
 
 # Documentation directory
 docs/
+
+# versions directory
+agent-device/versions/
 
 # Temporary files
 *.tmp
