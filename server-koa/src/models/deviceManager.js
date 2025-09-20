@@ -4,11 +4,13 @@
 // 中文注释：设备管理（ESM 默认导出实例）
 import {
   saveDeviceInfo,
-  recordDeviceConnection,
+  updateDeviceConnectionStatus,
   recordDeviceDisconnection,
   updateDeviceHeartbeat,
   updateDeviceSystemInfo,
   recordDeviceUpgrade,
+  updateDeviceCurrentVersion,
+  updateDeviceDeployMetadata,
   getAllDevices as getStoredDevices,
   cleanupOfflineDevices
 } from './deviceStorage.js';
@@ -51,7 +53,7 @@ class DeviceManager {
    */
   registerDevice(socket, deviceInfo) {
     const {
-      deviceId, deviceName, version, wifiName, wifiSignal, publicIp,
+      deviceId, deviceName, wifiName, wifiSignal, publicIp,
       localIp, macAddresses,
       // 分组字段（优先）
       system = {}, agent = {}, network = {}, storage = {}, deploy = {}, health = {}
@@ -76,7 +78,6 @@ class DeviceManager {
       socket,
       info: {
         deviceName: deviceName || deviceId,
-        version: version || 'unknown',
         // 分组存储为首选数据结构，优先使用新数据，回退到已存在的数据
         system: {
           platform: system.platform || existingInfo?.system?.platform || 'unknown',
@@ -104,9 +105,11 @@ class DeviceManager {
         health: {
           uptimeSeconds: health.uptimeSeconds ?? existingInfo?.health?.uptimeSeconds ?? null
         },
-        // 保留其他可能的字段
-        deployPath: existingInfo?.deployPath || null,
-        ...deviceInfo
+        // 保留其他有效的设备信息字段（排除状态和时间戳等非设备信息字段）
+        ...(function(info) {
+          const { status, timestamp, ...validFields } = info;
+          return validFields;
+        })(deviceInfo)
       },
       status: 'online',
       connectedAt: new Date(),
@@ -123,14 +126,15 @@ class DeviceManager {
 
     // 先保存设备信息到持久化存储，然后再记录连接事件
     this._saveDeviceInfoAndConnectionAsync(deviceId, device.info, {
-      wifiName,
-      wifiSignal,
-      publicIp,
-      localIp,
-      macAddresses
+      wifiName: network.wifiName || wifiName,
+      wifiSignal: network.wifiSignal || wifiSignal,
+      publicIp: network.publicIp || publicIp,
+      localIp: network.localIp || localIp,
+      macAddresses: network.macAddresses || macAddresses
     });
 
-    const wifiInfo = wifiName ? ` (WiFi: ${wifiName})` : ' (无WiFi连接)';
+    const finalWifiName = network.wifiName || wifiName;
+    const wifiInfo = finalWifiName ? ` (WiFi: ${finalWifiName})` : ' (无WiFi连接)';
     console.log(`设备注册成功: ${deviceId} (${device.info.deviceName})${wifiInfo}`);
     return device;
   }
@@ -172,7 +176,6 @@ class DeviceManager {
         onlineDevices.push({
           deviceId,
           deviceName: device.info.deviceName,
-          version: device.info.version,
           system: {
             platform: device.info.system?.platform || 'unknown',
             osVersion: device.info.system?.osVersion ?? null,
@@ -219,7 +222,6 @@ class DeviceManager {
       devices.push({
         deviceId,
         deviceName: device.info.deviceName,
-        version: device.info.version,
         system: {
           platform: device.info.system?.platform || 'unknown',
           osVersion: device.info.system?.osVersion ?? null,
@@ -283,7 +285,7 @@ class DeviceManager {
     if (!device) return;
     // 更新分组字段为主
     const {
-      agentVersion, osVersion, arch, type,
+      agentVersion, osVersion, arch,
       uptimeSeconds, diskFreeBytes, writable, rollbackAvailable
     } = systemInfo;
 
@@ -307,7 +309,6 @@ class DeviceManager {
     device.info.health = device.info.health || {};
     if (uptimeSeconds !== undefined) device.info.health.uptimeSeconds = uptimeSeconds;
 
-    if (type !== undefined) device.info.type = type;
 
 
     const toSave = {
@@ -369,6 +370,52 @@ class DeviceManager {
   isDeviceOnline(deviceId) {
     const device = this.devices.get(deviceId);
     return device && device.status === 'online';
+  }
+
+  /**
+   * 发送命令并等待响应
+   */
+  async sendCommand(deviceId, command, params = {}, timeout = 30000) {
+    const device = this.devices.get(deviceId);
+    if (!device || !device.socket || device.status !== 'online') {
+      return {
+        success: false,
+        error: '设备不在线或不存在'
+      };
+    }
+
+    return new Promise((resolve) => {
+      const messageId = `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const timeoutId = setTimeout(() => {
+        // 清理监听器
+        device.socket.off(`response:${messageId}`, responseHandler);
+        resolve({
+          success: false,
+          error: '命令执行超时'
+        });
+      }, timeout);
+
+      const responseHandler = (response) => {
+        clearTimeout(timeoutId);
+        resolve({
+          success: true,
+          data: response
+        });
+      };
+
+      // 监听响应
+      device.socket.once(`response:${messageId}`, responseHandler);
+
+      // 发送命令
+      const commandData = {
+        command,
+        params,
+        messageId,
+        timestamp: new Date().toISOString()
+      };
+
+      device.socket.emit('device:command', commandData);
+    });
   }
 
   /**
@@ -437,6 +484,185 @@ class DeviceManager {
     }
   }
 
+  /**
+   * 更新设备当前版本信息
+   */
+  async updateCurrentVersion(deviceId, project, versionInfo) {
+    try {
+      await updateDeviceCurrentVersion(deviceId, project, versionInfo);
+      const device = this.devices.get(deviceId);
+      if (device) {
+        device.info.deploy = device.info.deploy || {};
+        device.info.deploy.currentVersions = device.info.deploy.currentVersions || {
+          frontend: { version: null, deployDate: null, deployPath: null, packageInfo: null },
+          backend: { version: null, deployDate: null, deployPath: null, packageInfo: null }
+        };
+        if (project && ['frontend', 'backend'].includes(project)) {
+          const deployPath = typeof versionInfo.deployPath === 'string'
+            ? versionInfo.deployPath.trim()
+            : versionInfo.deployPath || null;
+          device.info.deploy.currentVersions[project] = {
+            version: versionInfo.version || device.info.deploy.currentVersions[project]?.version || null,
+            deployDate: versionInfo.deployDate || versionInfo.deployTime || device.info.deploy.currentVersions[project]?.deployDate || null,
+            deployPath: deployPath || device.info.deploy.currentVersions[project]?.deployPath || null,
+            packageInfo: versionInfo.packageInfo || device.info.deploy.currentVersions[project]?.packageInfo || null
+          };
+
+          if (deployPath) {
+            device.info.deploy.currentDeployPaths = device.info.deploy.currentDeployPaths || {
+              frontend: null,
+              backend: null
+            };
+            device.info.deploy.currentDeployPaths[project] = deployPath;
+          }
+        }
+      }
+      console.log(`更新设备版本: ${deviceId} ${project}`, versionInfo);
+    } catch (error) {
+      console.error('更新设备版本失败:', error);
+    }
+  }
+
+  async updateDeployMetadata(deviceId, project, metadata) {
+    try {
+      const normalizedMetadata = { ...metadata };
+      if (typeof normalizedMetadata.deployPath === 'string') {
+        normalizedMetadata.deployPath = normalizedMetadata.deployPath.trim();
+      }
+
+      await updateDeviceDeployMetadata(deviceId, project, normalizedMetadata);
+      const device = this.devices.get(deviceId);
+      if (device) {
+        device.info.deploy = device.info.deploy || {};
+        device.info.deploy.currentDeployPaths = device.info.deploy.currentDeployPaths || {
+          frontend: null,
+          backend: null
+        };
+
+        if (project && ['frontend', 'backend'].includes(project) && normalizedMetadata.deployPath) {
+          device.info.deploy.currentDeployPaths[project] = normalizedMetadata.deployPath;
+        }
+
+        if (normalizedMetadata.status) {
+          device.info.deploy.lastDeployStatus = normalizedMetadata.status;
+        }
+
+        if (normalizedMetadata.deployAt) {
+          device.info.deploy.lastDeployAt = normalizedMetadata.deployAt;
+        }
+
+        if (normalizedMetadata.rollbackAt) {
+          device.info.deploy.lastRollbackAt = normalizedMetadata.rollbackAt;
+        }
+      }
+    } catch (error) {
+      console.error('更新设备部署信息失败:', error);
+    }
+  }
+
+  /**
+   * 更新设备当前部署路径（从 agent 通知）
+   */
+  async updateCurrentDeployPath(deviceId, project, deployPath, updatedAt) {
+    try {
+      const device = this.devices.get(deviceId);
+      if (!device) {
+        console.warn(`设备不存在: ${deviceId}`);
+        return;
+      }
+
+      const normalizedPath = typeof deployPath === 'string' ? deployPath.trim() : deployPath;
+
+      // 更新内存中的当前部署路径
+      device.info.deploy = device.info.deploy || {};
+      device.info.deploy.currentDeployPaths = device.info.deploy.currentDeployPaths || {
+        frontend: null,
+        backend: null
+      };
+
+      if (project && ['frontend', 'backend'].includes(project)) {
+        device.info.deploy.currentDeployPaths[project] = normalizedPath;
+
+        // 同时更新 currentVersions 中的 deployPath
+        device.info.deploy.currentVersions = device.info.deploy.currentVersions || {
+          frontend: { version: null, deployDate: null, deployPath: null, packageInfo: null },
+          backend: { version: null, deployDate: null, deployPath: null, packageInfo: null }
+        };
+        device.info.deploy.currentVersions[project].deployPath = normalizedPath;
+
+        // 持久化到存储
+        await this.updateCurrentVersion(deviceId, project, {
+          deployPath: normalizedPath,
+          deployDate: device.info.deploy.currentVersions[project].deployDate || updatedAt || new Date().toISOString(),
+          version: device.info.deploy.currentVersions[project].version || 'unknown',
+          packageInfo: device.info.deploy.currentVersions[project].packageInfo
+        });
+
+        console.log(`更新设备当前部署路径: ${deviceId} ${project} -> ${normalizedPath}`);
+      }
+    } catch (error) {
+      console.error('更新设备当前部署路径失败:', error);
+    }
+  }
+
+  /**
+   * 更新设备部署路径信息
+   */
+  async updateDeployPath(deviceId, project, deployPath) {
+    try {
+      const device = this.devices.get(deviceId);
+      if (!device) {
+        console.warn(`设备不存在: ${deviceId}`);
+        return;
+      }
+
+      // 确保 deploy 结构符合新的配置格式
+      device.info.deploy = device.info.deploy || {};
+      device.info.deploy.currentDeployments = device.info.deploy.currentDeployments || {
+        frontend: {
+          version: 'unknown',
+          deployDate: null,
+          deployPath: null,
+          packageInfo: null,
+          status: 'unknown',
+          lastOperationType: null,
+          lastOperationDate: null
+        },
+        backend: {
+          version: 'unknown',
+          deployDate: null,
+          deployPath: null,
+          packageInfo: null,
+          status: 'unknown',
+          lastOperationType: null,
+          lastOperationDate: null
+        }
+      };
+
+      if (project && ['frontend', 'backend'].includes(project)) {
+        const normalizedPath = typeof deployPath === 'string' ? deployPath.trim() : deployPath;
+        const updateTime = new Date().toISOString();
+
+        // 更新内存中的数据
+        device.info.deploy.currentDeployments[project].deployPath = normalizedPath;
+        device.info.deploy.currentDeployments[project].lastOperationType = 'path_update';
+        device.info.deploy.currentDeployments[project].lastOperationDate = updateTime;
+
+        // 持久化到存储
+        await this.updateCurrentVersion(deviceId, project, {
+          deployPath: normalizedPath,
+          deployDate: device.info.deploy.currentDeployments[project].deployDate || updateTime,
+          version: device.info.deploy.currentDeployments[project].version || 'unknown',
+          packageInfo: device.info.deploy.currentDeployments[project].packageInfo
+        });
+
+        console.log(`更新设备部署路径: ${deviceId} ${project} -> ${normalizedPath}`);
+      }
+    } catch (error) {
+      console.error('更新设备部署路径失败:', error);
+    }
+  }
+
   // 私有异步辅助方法
   async _updateSystemInfoAsync(deviceId, systemInfo) {
     try {
@@ -450,13 +676,10 @@ class DeviceManager {
     try {
       // 先保存设备信息（包含网络信息）
       await saveDeviceInfo(deviceId, deviceInfo, network);
-      // 然后记录连接事件（设备现在已存在）
-      await recordDeviceConnection(deviceId, {
-        wifiName: network.wifiName,
-        publicIp: network.publicIp
-      });
+      // 然后更新连接状态（简化版本，不记录历史）
+      await updateDeviceConnectionStatus(deviceId, true);
     } catch (error) {
-      console.error('保存设备信息和记录连接失败:', error);
+      console.error('保存设备信息和更新连接状态失败:', error);
     }
   }
 

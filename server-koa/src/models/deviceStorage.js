@@ -2,7 +2,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { ErrorLogger, FileHelper } from '../utils/common.js';
+import { ErrorLogger, FileHelper, DateHelper } from '../utils/common.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +37,7 @@ function createDefaultConfig() {
       totalDevices: 0,
       onlineDevices: 0,
       totalConnections: 0,
-      lastUpdated: new Date().toISOString()
+      lastUpdated: DateHelper.getCurrentDate()
     }
   };
 }
@@ -94,7 +94,7 @@ export async function saveDevicesConfig(config) {
   // 串行化保存，避免并发写
   lastSavePromise = lastSavePromise.then(async () => {
     try {
-      config.statistics.lastUpdated = new Date().toISOString();
+      config.statistics.lastUpdated = DateHelper.getCurrentDate();
       await atomicWriteJson(DEVICES_CONFIG_PATH, config, 2);
       return config;
     } catch (error) {
@@ -111,7 +111,7 @@ export async function saveDevicesConfig(config) {
 export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
+    const now = DateHelper.getCurrentDate();
     
     if (config.devices[deviceId]) {
       // 更新现有设备
@@ -132,16 +132,13 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
         macAddresses: Array.isArray(device.deviceInfo.network?.macAddresses) ? device.deviceInfo.network.macAddresses : [],
         ...(network || {})
       };
-      
-      device.metadata.lastUpdated = now;
-      
+
     } else {
       // 新设备
       config.devices[deviceId] = {
         deviceInfo: {
           deviceId,
           deviceName: deviceInfo?.deviceName || deviceId,
-          version: deviceInfo?.version || 'unknown',
           system: {
             platform: deviceInfo?.system?.platform || deviceInfo?.platform || 'unknown',
             osVersion: deviceInfo?.system?.osVersion ?? deviceInfo?.osVersion ?? null,
@@ -167,21 +164,12 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
           health: {
             uptimeSeconds: deviceInfo?.health?.uptimeSeconds ?? deviceInfo?.uptimeSeconds ?? null
           },
-          type: deviceInfo?.type ?? deviceInfo?.system?.type ?? null,
-          deployPath: null
         },
-        connectionHistory: [],
         upgradeHistory: [],
         status: {
           current: 'offline',
           lastOnline: null,
           lastHeartbeat: null
-        },
-        metadata: {
-          firstSeen: now,
-          lastUpdated: now,
-          totalConnections: 0,
-          totalUpgrades: 0
         }
       };
       
@@ -196,55 +184,39 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
 }
 
 /**
- * 记录设备连接
+ * 更新设备连接状态（简化版本，不记录历史）
  */
-export async function recordDeviceConnection(deviceId, connection = {}) {
+export async function updateDeviceConnectionStatus(deviceId, isOnline = true) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
-    
+    const now = DateHelper.getCurrentDate();
+
     if (!config.devices[deviceId]) {
-      console.warn(`尝试记录连接但设备不存在: ${deviceId}`);
-      return config; // 直接返回，不创建设备（应该先通过 saveDeviceInfo 创建）
+      console.warn(`尝试更新连接状态但设备不存在: ${deviceId}`);
+      return config;
     }
-    
+
     const device = config.devices[deviceId];
     const wasOnline = device.status.current === 'online';
-    
+
     // 更新状态
-    device.status.current = 'online';
-    device.status.lastOnline = now;
-    device.status.lastHeartbeat = now;
-    
-    // 记录连接历史
-    const connectionRecord = {
-      connectedAt: now,
-      disconnectedAt: null,
-      duration: null,
-      // 兼容读取 deviceInfo.network
-      wifiName: connection.wifiName ?? device.deviceInfo?.network?.wifiName ?? null,
-      publicIp: connection.publicIp ?? device.deviceInfo?.network?.publicIp ?? null
-    };
-    
-    device.connectionHistory.unshift(connectionRecord);
-    
-    // 限制历史记录数量
-    if (device.connectionHistory.length > config.settings.maxConnectionHistory) {
-      device.connectionHistory = device.connectionHistory.slice(0, config.settings.maxConnectionHistory);
+    device.status.current = isOnline ? 'online' : 'offline';
+    if (isOnline) {
+      device.status.lastOnline = now;
+      device.status.lastHeartbeat = now;
     }
-    
-    device.metadata.totalConnections++;
-    device.metadata.lastUpdated = now;
-    
+
     // 更新统计
-    if (!wasOnline) {
+    if (isOnline && !wasOnline) {
       config.statistics.onlineDevices = Math.max(0, (config.statistics.onlineDevices || 0) + 1);
+      config.statistics.totalConnections++;
+    } else if (!isOnline && wasOnline) {
+      config.statistics.onlineDevices = Math.max(0, (config.statistics.onlineDevices || 0) - 1);
     }
-    config.statistics.totalConnections++;
-    
+
     return await saveDevicesConfig(config);
   } catch (error) {
-    console.error('记录设备连接失败:', error);
+    console.error('更新设备连接状态失败:', error);
     throw error;
   }
 }
@@ -255,7 +227,7 @@ export async function recordDeviceConnection(deviceId, connection = {}) {
 export async function recordDeviceDisconnection(deviceId) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
+    const now = DateHelper.getCurrentDate();
     
     if (!config.devices[deviceId]) {
       return config; // 设备不存在，直接返回
@@ -268,16 +240,7 @@ export async function recordDeviceDisconnection(deviceId) {
     device.status.current = 'offline';
     device.status.lastOnline = now;
     
-    // 更新最近的连接记录
-    if (device.connectionHistory.length > 0) {
-      const lastConnection = device.connectionHistory[0];
-      if (!lastConnection.disconnectedAt) {
-        lastConnection.disconnectedAt = now;
-        lastConnection.duration = new Date(now) - new Date(lastConnection.connectedAt);
-      }
-    }
     
-    device.metadata.lastUpdated = now;
     
     // 更新统计
     if (wasOnline && config.statistics.onlineDevices > 0) {
@@ -297,7 +260,7 @@ export async function recordDeviceDisconnection(deviceId) {
 export async function updateDeviceHeartbeat(deviceId, network = {}) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
+    const now = DateHelper.getCurrentDate();
 
     if (!config.devices[deviceId]) {
       return config; // 设备不存在，直接返回
@@ -333,7 +296,6 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
       device.deviceInfo.network.macAddresses = network.macAddresses;
     }
 
-    device.metadata.lastUpdated = now;
 
     return await saveDevicesConfig(config);
   } catch (error) {
@@ -348,7 +310,7 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
 export async function updateDeviceSystemInfo(deviceId, systemInfo = {}) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
+    const now = DateHelper.getCurrentDate();
 
     if (!config.devices[deviceId]) {
       return config; // 设备不存在，直接返回
@@ -380,7 +342,6 @@ export async function updateDeviceSystemInfo(deviceId, systemInfo = {}) {
       Object.assign(device.deviceInfo.health, systemInfo.health);
     }
 
-    device.metadata.lastUpdated = now;
 
     return await saveDevicesConfig(config);
   } catch (error) {
@@ -395,19 +356,19 @@ export async function updateDeviceSystemInfo(deviceId, systemInfo = {}) {
 export async function recordDeviceUpgrade(deviceId, upgradeInfo) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
-    
+    const now = DateHelper.getCurrentDate();
+
     if (!config.devices[deviceId]) {
       throw new Error(`设备不存在: ${deviceId}`);
     }
-    
+
     const device = config.devices[deviceId];
-    
+
     const upgrade = {
       upgradeId: upgradeInfo.upgradeId || `upgrade-${Date.now()}`,
       project: upgradeInfo.project,
       packageName: upgradeInfo.packageName,
-      fromVersion: upgradeInfo.fromVersion || device.deviceInfo.version,
+      fromVersion: upgradeInfo.fromVersion || 'unknown',
       toVersion: upgradeInfo.toVersion,
       status: upgradeInfo.status || 'started',
       startedAt: upgradeInfo.startedAt || now,
@@ -415,22 +376,20 @@ export async function recordDeviceUpgrade(deviceId, upgradeInfo) {
       duration: upgradeInfo.duration || null,
       error: upgradeInfo.error || null
     };
-    
+
     device.upgradeHistory.unshift(upgrade);
-    
+
     // 限制历史记录数量
     if (device.upgradeHistory.length > config.settings.maxUpgradeHistory) {
       device.upgradeHistory = device.upgradeHistory.slice(0, config.settings.maxUpgradeHistory);
     }
-    
-    // 如果升级成功，更新设备版本
-    if (upgradeInfo.status === 'completed' && upgradeInfo.toVersion) {
-      device.deviceInfo.version = upgradeInfo.toVersion;
+
+    // 如果升级成功，更新当前版本信息
+    if (upgradeInfo.status === 'completed' && upgradeInfo.versionInfo) {
+      await updateDeviceCurrentVersion(deviceId, upgradeInfo.project, upgradeInfo.versionInfo);
     }
-    
-    device.metadata.totalUpgrades++;
-    device.metadata.lastUpdated = now;
-    
+
+
     return await saveDevicesConfig(config);
   } catch (error) {
     console.error('记录设备升级失败:', error);
@@ -439,58 +398,132 @@ export async function recordDeviceUpgrade(deviceId, upgradeInfo) {
 }
 
 /**
- * 设置设备部署路径
+ * 更新设备当前版本信息
  */
-export async function setDeviceDeployPath(deviceId, deployPath) {
+export async function updateDeviceCurrentVersion(deviceId, project, versionInfo) {
   try {
     const config = await getDevicesConfig();
-    const now = new Date().toISOString();
-    
+    const now = DateHelper.getCurrentDate();
+
     if (!config.devices[deviceId]) {
-      // 如果设备不存在，创建基本信息
-      await saveDeviceInfo(deviceId, { deviceName: deviceId });
+      throw new Error(`设备不存在: ${deviceId}`);
     }
-    
-    config.devices[deviceId].deviceInfo.deployPath = deployPath;
-    config.devices[deviceId].metadata.lastUpdated = now;
-    
-    await saveDevicesConfig(config);
-    
-    return {
-      deviceId,
-      deployPath,
-      updatedAt: now,
-      createdAt: config.devices[deviceId].metadata.firstSeen
-    };
+
+    const device = config.devices[deviceId];
+
+    // 确保 deploy 字段存在
+    if (!device.deviceInfo.deploy) {
+      device.deviceInfo.deploy = { rollbackAvailable: false };
+    }
+
+    // 确保 currentVersions 字段存在
+    if (!device.deviceInfo.deploy.currentVersions) {
+      device.deviceInfo.deploy.currentVersions = {
+        frontend: { version: null, deployDate: null, deployPath: null, packageInfo: null },
+        backend: { version: null, deployDate: null, deployPath: null, packageInfo: null }
+      };
+    }
+
+    if (!device.deviceInfo.deploy.currentDeployPaths) {
+      device.deviceInfo.deploy.currentDeployPaths = {
+        frontend: null,
+        backend: null
+      };
+    }
+
+    // 更新指定项目的版本信息
+    if (project && ['frontend', 'backend'].includes(project)) {
+      const existingRecord = device.deviceInfo.deploy.currentVersions[project] || {};
+      const deployPath = typeof versionInfo.deployPath === 'string'
+        ? versionInfo.deployPath.trim()
+        : versionInfo.deployPath || null;
+
+      device.deviceInfo.deploy.currentVersions[project] = {
+        version: versionInfo.version || existingRecord.version || null,
+        deployDate: versionInfo.deployDate || versionInfo.deployTime || existingRecord.deployDate || now,
+        deployPath: deployPath || existingRecord.deployPath || null,
+        packageInfo: versionInfo.packageInfo || existingRecord.packageInfo || null
+      };
+
+      if (deployPath) {
+        device.deviceInfo.deploy.currentDeployPaths[project] = deployPath;
+      }
+    }
+
+
+    return await saveDevicesConfig(config);
   } catch (error) {
-    console.error('设置设备部署路径失败:', error);
+    console.error('更新设备当前版本失败:', error);
     throw error;
   }
 }
 
 /**
- * 获取设备部署路径
+ * 更新部署元信息（部署路径、状态等）
  */
-export async function getDeviceDeployPath(deviceId) {
+export async function updateDeviceDeployMetadata(deviceId, project, metadata = {}) {
   try {
     const config = await getDevicesConfig();
-    
+    const now = DateHelper.getCurrentDate();
+
     if (!config.devices[deviceId]) {
-      return null;
+      throw new Error(`设备不存在: ${deviceId}`);
     }
-    
-    const deployPath = config.devices[deviceId].deviceInfo.deployPath;
-    
-    return deployPath ? {
-      deployPath,
-      updatedAt: config.devices[deviceId].metadata.lastUpdated,
-      createdAt: config.devices[deviceId].metadata.firstSeen
-    } : null;
+
+    const device = config.devices[deviceId];
+    device.deviceInfo.deploy = device.deviceInfo.deploy || {};
+    device.deviceInfo.deploy.currentDeployPaths = device.deviceInfo.deploy.currentDeployPaths || {
+      frontend: null,
+      backend: null
+    };
+
+    if (project && ['frontend', 'backend'].includes(project)) {
+      const deployPath = typeof metadata.deployPath === 'string'
+        ? metadata.deployPath.trim()
+        : metadata.deployPath;
+
+      if (deployPath) {
+        device.deviceInfo.deploy.currentDeployPaths[project] = deployPath;
+      }
+    }
+
+    if (metadata.status) {
+      device.deviceInfo.deploy.lastDeployStatus = metadata.status;
+    }
+
+    if (metadata.deployAt) {
+      device.deviceInfo.deploy.lastDeployAt = metadata.deployAt;
+    }
+
+    if (metadata.rollbackAt) {
+      device.deviceInfo.deploy.lastRollbackAt = metadata.rollbackAt;
+    }
+
+
+    return await saveDevicesConfig(config);
+  } catch (error) {
+    console.error('更新设备部署信息失败:', error);
+    throw error;
+  }
+}
+
+/**
+ * 获取设备的部署路径（当前记录）
+ */
+export async function getDeviceDeployPaths(deviceId) {
+  try {
+    const config = await getDevicesConfig();
+    return config.devices[deviceId]?.deviceInfo?.deploy?.currentDeployPaths || {
+      frontend: null,
+      backend: null
+    };
   } catch (error) {
     console.error('获取设备部署路径失败:', error);
     throw error;
   }
 }
+
+
 
 /**
  * 获取所有设备信息

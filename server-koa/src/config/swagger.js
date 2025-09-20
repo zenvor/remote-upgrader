@@ -80,14 +80,7 @@ const swaggerOptions = {
               type: 'string',
               description: '包文件路径'
             },
-            manifestPath: {
-              type: 'string',
-              description: 'Manifest 文件路径'
-            },
-            manifest: {
-              type: 'object',
-              description: 'Manifest 元数据'
-            }
+            // manifests 机制已废弃，不再暴露相关字段
           }
         },
         
@@ -147,10 +140,46 @@ const swaggerOptions = {
               type: 'object',
               description: '部署信息',
               properties: {
-                deployPath: { type: 'string', nullable: true, description: '部署路径' },
                 rollbackAvailable: { type: 'boolean', nullable: true, description: '可回滚' },
                 lastDeployStatus: { type: 'string', nullable: true, description: '最近部署状态' },
-                lastDeployAt: { type: 'string', format: 'date-time', nullable: true, description: '最近部署时间' }
+                lastDeployAt: { type: 'string', format: 'date-time', nullable: true, description: '最近部署时间' },
+                lastRollbackAt: { type: 'string', format: 'date-time', nullable: true, description: '最近回滚时间' },
+                currentDeployPaths: {
+                  type: 'object',
+                  nullable: true,
+                  description: '已记录的部署路径',
+                  properties: {
+                    frontend: { type: 'string', nullable: true, description: '前端部署路径' },
+                    backend: { type: 'string', nullable: true, description: '后端部署路径' }
+                  }
+                },
+                currentVersions: {
+                  type: 'object',
+                  nullable: true,
+                  description: '当前版本详情',
+                  properties: {
+                    frontend: {
+                      type: 'object',
+                      nullable: true,
+                      properties: {
+                        version: { type: 'string', nullable: true, description: '版本号' },
+                        deployDate: { type: 'string', format: 'date-time', nullable: true, description: '部署时间' },
+                        deployPath: { type: 'string', nullable: true, description: '部署路径' },
+                        packageInfo: { type: 'object', nullable: true, description: '包信息' }
+                      }
+                    },
+                    backend: {
+                      type: 'object',
+                      nullable: true,
+                      properties: {
+                        version: { type: 'string', nullable: true, description: '版本号' },
+                        deployDate: { type: 'string', format: 'date-time', nullable: true, description: '部署时间' },
+                        deployPath: { type: 'string', nullable: true, description: '部署路径' },
+                        packageInfo: { type: 'object', nullable: true, description: '包信息' }
+                      }
+                    }
+                  }
+                }
               }
             },
             hasDeployPath: { type: 'boolean', description: '是否已配置部署路径' }
@@ -168,7 +197,7 @@ const swaggerOptions = {
             },
             data: {
               type: 'object',
-              description: '命令数据（随命令变化）。对于 cmd:upgrade：{ project: frontend|backend, fileName: string, version?: string, deployPath?: string }'
+              description: '命令数据（随命令变化）。支持的命令详见 /docs/device-commands 文档。常用命令：cmd:upgrade, cmd:rollback, cmd:status, getCurrentVersion'
             }
           },
           required: ['command']
@@ -220,6 +249,10 @@ const swaggerOptions = {
       {
         name: 'Devices',
         description: '设备管理'
+      },
+      {
+        name: '版本管理',
+        description: '查询当前部署版本并执行单步回滚'
       }
     ]
   },

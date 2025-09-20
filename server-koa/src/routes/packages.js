@@ -60,14 +60,7 @@ const router = new Router({
  *                           packagePath:
  *                             type: string
  *                             description: 包文件相对路径
- *                           manifestPath:
- *                             type: string
- *                             nullable: true
- *                             description: manifest文件相对路径
- *                           manifest:
- *                             type: object
- *                             nullable: true
- *                             description: manifest文件内容
+ *                           # manifests 机制已废弃
  *                       description: 包信息列表
  *                     total:
  *                       type: integer
@@ -79,21 +72,18 @@ const router = new Router({
  *                   fileName: "frontend-v1.0.0.zip"
  *                   fileSize: 10485760
  *                   fileMD5: "a1b2c3d4e5f6789012345678901234567890abcd"
+ *                   version: "v1.0.0"
+ *                   uploadedAt: "2025-09-10T10:30:00.000Z"
+ *                   uploadedBy: "admin"
  *                   packagePath: "packages/frontend/frontend-v1.0.0.zip"
- *                   manifestPath: "manifests/frontend/frontend-v1.0.0.zip.manifest.json"
- *                   manifest:
- *                     project: "frontend"
- *                     fileName: "frontend-v1.0.0.zip"
- *                     fileSize: 10485760
- *                     fileMD5: "a1b2c3d4e5f6789012345678901234567890abcd"
- *                     uploadedAt: "2025-09-10T10:30:00.000Z"
  *                 - project: "backend"
  *                   fileName: "backend-v1.0.0.zip"
  *                   fileSize: 20971520
  *                   fileMD5: "1234567890abcdef1234567890abcdef12345678"
+ *                   version: "v1.0.0"
+ *                   uploadedAt: "2025-09-10T10:30:00.000Z"
+ *                   uploadedBy: "admin"
  *                   packagePath: "packages/backend/backend-v1.0.0.zip"
- *                   manifestPath: null
- *                   manifest: null
  *               total: 2
  *       400:
  *         description: 参数错误
@@ -122,7 +112,7 @@ router.get('/', getPackages);
  *   get:
  *     tags: [Packages]
  *     summary: 获取包详情
- *     description: 获取指定包的详细信息，包括文件信息和 manifest 数据
+ *     description: 获取指定包的详细信息
  *     parameters:
  *       - $ref: '#/components/parameters/ProjectParam'
  *       - $ref: '#/components/parameters/FileNameParam'
@@ -153,17 +143,22 @@ router.get('/', getPackages);
  *                           type: string
  *                           nullable: true
  *                           description: 文件MD5值
+ *                         version:
+ *                           type: string
+ *                           nullable: true
+ *                           description: 包版本
+ *                         uploadedAt:
+ *                           type: string
+ *                           format: date-time
+ *                           nullable: true
+ *                           description: 上传时间
+ *                         uploadedBy:
+ *                           type: string
+ *                           nullable: true
+ *                           description: 上传者
  *                         packagePath:
  *                           type: string
  *                           description: 包文件相对路径
- *                         manifestPath:
- *                           type: string
- *                           nullable: true
- *                           description: manifest文件相对路径
- *                         manifest:
- *                           type: object
- *                           nullable: true
- *                           description: manifest文件内容
  *             example:
  *               success: true
  *               package:
@@ -171,15 +166,10 @@ router.get('/', getPackages);
  *                 fileName: "frontend-v1.0.0.zip"
  *                 fileSize: 10485760
  *                 fileMD5: "a1b2c3d4e5f6789012345678901234567890abcd"
+ *                 version: "v1.0.0"
+ *                 uploadedAt: "2025-09-09T03:30:00.000Z"
+ *                 uploadedBy: "admin"
  *                 packagePath: "packages/frontend/frontend-v1.0.0.zip"
- *                 manifestPath: "manifests/frontend/frontend-v1.0.0.zip.manifest.json"
- *                 manifest:
- *                   project: "frontend"
- *                   version: "v1.0.0"
- *                   fileName: "frontend-v1.0.0.zip"
- *                   fileSize: 10485760
- *                   fileMD5: "a1b2c3d4e5f6789012345678901234567890abcd"
- *                   uploadedAt: "2025-09-09T03:30:00.000Z"
  *       400:
  *         description: 参数错误
  *         content:
@@ -216,7 +206,7 @@ router.get('/:project/:fileName', getPackageDetail);
  *   delete:
  *     tags: [Packages]
  *     summary: 删除包
- *     description: 删除指定的包文件和相关的 manifest 文件
+ *     description: 删除指定的包文件
  *     parameters:
  *       - $ref: '#/components/parameters/ProjectParam'
  *       - $ref: '#/components/parameters/FileNameParam'
@@ -351,12 +341,10 @@ router.get('/:project/:fileName/download', downloadPackage);
  *                 packages:
  *                   frontend:
  *                     uploadDir: "uploads/packages/frontend"
- *                     manifestDir: "manifests/frontend"
  *                     maxFileSize: "100MB"
  *                     allowedExtensions: [".zip", ".tar.gz", ".tar"]
  *                   backend:
  *                     uploadDir: "uploads/packages/backend"
- *                     manifestDir: "manifests/backend" 
  *                     maxFileSize: "100MB"
  *                     allowedExtensions: [".zip", ".tar.gz", ".tar"]
  *                 settings:

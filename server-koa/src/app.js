@@ -1,3 +1,7 @@
+// 中文注释：加载环境变量配置
+import dotenv from 'dotenv';
+dotenv.config();
+
 // 中文注释：ESM 导入与 __dirname 兼容处理
 import Koa from 'koa';
 import Router from '@koa/router';
@@ -5,6 +9,7 @@ import cors from '@koa/cors';
 import bodyParser from 'koa-bodyparser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import serve from 'koa-static';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -16,6 +21,7 @@ import uploadRouter from './routes/upload.js';
 import packageRouter from './routes/packages.js';
 import deviceRouter from './routes/devices.js';
 import docsRouter from './routes/docs.js';
+import versionRouter from './routes/versions.js';
 import { setupSocketHandlers } from './controllers/socketController.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +57,14 @@ app.use(bodyParser({
 
 // 统一时间格式化中间件（在路由之前，处理所有响应体中的时间字段）
 app.use(createTimeFormatter());
+
+// 静态文件服务中间件 - 服务前端打包后的静态文件
+const staticPath = path.join(__dirname, '..', 'public');
+app.use(serve(staticPath, {
+  maxAge: 1000 * 60 * 60 * 24 * 7, // 7天缓存
+  index: 'index.html',
+  gzip: true
+}));
 
 // 错误处理中间件
 app.use(async (ctx, next) => {
@@ -96,6 +110,7 @@ app.use(router.routes());
 app.use(uploadRouter.routes());
 app.use(packageRouter.routes());
 app.use(deviceRouter.routes());
+app.use(versionRouter.routes());
 
 // Socket.IO 连接处理
 setupSocketHandlers(io);
@@ -103,13 +118,13 @@ setupSocketHandlers(io);
 // 确保必要目录存在
 async function ensureDirectories() {
   const dirs = [
+    'config',
     'uploads/packages/frontend',
     'uploads/packages/backend',
-    'manifests/frontend',
-    'manifests/backend',
-    'logs'
+    'logs',
+    'public' // 静态文件目录
   ];
-  
+
   for (const dir of dirs) {
     await fs.ensureDir(path.join(__dirname, '..', dir));
   }
@@ -118,10 +133,12 @@ async function ensureDirectories() {
 // 启动服务
 export async function start() {
   await ensureDirectories();
-  
+
   const port = process.env.PORT || 3000;
-  server.listen(port, () => {
-    console.log(`远程升级系统服务已启动，端口: ${port}`);
+  const host = process.env.HOST || '0.0.0.0';
+
+  server.listen(port, host, () => {
+    console.log(`远程升级系统服务已启动，地址: ${host}:${port}`);
   });
 }
 

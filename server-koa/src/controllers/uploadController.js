@@ -17,6 +17,18 @@ function extractVersionFromFileName(fileName) {
   return versionMatch ? versionMatch[1] : null;
 }
 
+// 中文注释：校验版本号（支持 v 前缀、预发布与构建元数据）
+function isValidVersion(version) {
+  const semverReg = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  return semverReg.test(version.trim());
+}
+
+// 中文注释：规范化版本号（无 v 前缀则补上）
+function normalizeVersion(version) {
+  const v = version.trim();
+  return v.startsWith('v') ? v : `v${v}`;
+}
+
 /**
  * 直接上传文件接口（简化版）
  */
@@ -27,6 +39,8 @@ async function directUpload(ctx) {
   console.log('调试信息 - project 类型:', typeof ctx.request.body.project);
   
   const project = ctx.request.body.project;
+  // 中文注释：前端可选传入的版本号
+  const inputVersion = (ctx.request.body.version || '').trim();
   const file = ctx.file;
 
   // 参数验证
@@ -87,8 +101,22 @@ async function directUpload(ctx) {
       }
     }
 
-    // 提取版本信息
-    const version = extractVersionFromFileName(file.originalname);
+    // 提取或使用用户输入的版本信息
+    let version;
+    if (inputVersion) {
+      if (!isValidVersion(inputVersion)) {
+        ctx.status = 400;
+        ctx.body = {
+          success: false,
+          error: '版本号不合法，示例：v1.2.3 或 1.2.3[-beta][+build]'
+        };
+        return;
+      }
+      version = normalizeVersion(inputVersion);
+    } else {
+      const extracted = extractVersionFromFileName(file.originalname);
+      version = extracted ? normalizeVersion(extracted) : 'unknown';
+    }
 
     // 添加包记录到配置中
     await addPackageRecord({
@@ -97,14 +125,15 @@ async function directUpload(ctx) {
       fileName: file.originalname,
       filePath: path.relative(path.join(__dirname, '../..'), targetPath),
       fileSize: file.size,
-      md5: fileMD5,
-      uploadTime: new Date().toISOString()
+      fileMD5: fileMD5,
+      uploadedAt: new Date().toISOString()
     });
 
     ctx.body = {
       success: true,
       done: true,
       message: '文件上传完成',
+      version,
       fileMD5,
       fileName: file.originalname,
       fileSize: file.size,

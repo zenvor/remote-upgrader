@@ -1,38 +1,125 @@
 // 中文注释：ESM 导入
 import deviceManager from '../models/deviceManager.js';
 import deviceConfig from '../models/deviceConfig.js';
+import { getAllDevices as getStoredDevices, getDeviceDeployPaths } from '../models/deviceStorage.js';
 
 /**
  * 获取设备列表（支持筛选和分页）
  */
 async function getDevices(ctx) {
-  const { 
+  const {
     status,        // 状态筛选: all, online, offline, upgrading, error
     search,        // 搜索关键词: 设备名称或ID
     pageNum = 1,   // 页码
     pageSize = 20  // 每页数量
   } = ctx.query;
-  
+
   try {
-    let devices = deviceManager.getAllDevices();
-    
-    // 为每个设备添加配置信息
-    let devicesWithConfig = await Promise.all(devices.map(async device => {
-      const deployConfig = await deviceConfig.getDeviceDeployPath(device.deviceId);
-      // 简单派生：近一次部署状态占位（与升级历史结合可后续完善）
-      const lastDeployStatus = null; // 目前无升级聚合，这里保留占位
-      const lastDeployAt = null;
-      return {
-        ...device,
-        deploy: {
-          deployPath: deployConfig ? deployConfig.deployPath : null,
-          rollbackAvailable: typeof device.rollbackAvailable === 'boolean' ? device.rollbackAvailable : null,
-          lastDeployStatus,
-          lastDeployAt
-        },
-        hasDeployPath: !!deployConfig,
+    // 获取内存中的设备状态信息（实时状态）
+    const liveDevices = deviceManager.getAllDevices();
+
+    // 获取存储中的完整设备信息（包括版本信息）
+    const storedDevices = await getStoredDevices();
+
+    // 合并实时状态和存储的完整信息
+    let devicesWithConfig = storedDevices.map(storedDevice => {
+      // 查找对应的实时设备状态
+      const liveDevice = liveDevices.find(d => d.deviceId === storedDevice.deviceInfo.deviceId);
+
+      // 提取部署信息，支持新的配置结构
+      const deployInfo = storedDevice.deviceInfo?.deploy || {};
+
+      // 兼容新旧配置结构
+      let currentDeployments;
+      if (deployInfo.currentDeployments) {
+        // 新配置结构
+        currentDeployments = deployInfo.currentDeployments;
+      } else {
+        // 兼容旧配置结构
+        const currentVersions = deployInfo.currentVersions || {
+          frontend: { version: null, deployDate: null, deployPath: null },
+          backend: { version: null, deployDate: null, deployPath: null }
+        };
+        currentDeployments = {
+          frontend: {
+            version: currentVersions.frontend?.version || 'unknown',
+            deployDate: currentVersions.frontend?.deployDate || null,
+            deployPath: currentVersions.frontend?.deployPath || null,
+            packageInfo: currentVersions.frontend?.packageInfo || null,
+            status: 'unknown',
+            lastOperationType: null,
+            lastOperationDate: null
+          },
+          backend: {
+            version: currentVersions.backend?.version || 'unknown',
+            deployDate: currentVersions.backend?.deployDate || null,
+            deployPath: currentVersions.backend?.deployPath || null,
+            packageInfo: currentVersions.backend?.packageInfo || null,
+            status: 'unknown',
+            lastOperationType: null,
+            lastOperationDate: null
+          }
+        };
+      }
+
+      // 格式化版本信息用于前端显示
+      const versions = {
+        frontend: currentDeployments.frontend?.version || '未部署',
+        backend: currentDeployments.backend?.version || '未部署'
       };
-    }));
+
+      // 是否存在任一部署路径（由 currentDeployments 派生）
+      const hasDeployPath = Boolean(
+        currentDeployments.frontend?.deployPath || currentDeployments.backend?.deployPath
+      );
+
+      return {
+        deviceId: storedDevice.deviceInfo.deviceId,
+        deviceName: storedDevice.deviceInfo.deviceName || storedDevice.deviceInfo.deviceId,
+        status: liveDevice?.status || 'offline', // 使用实时状态
+
+        // 系统信息
+        system: storedDevice.deviceInfo.system || {},
+        agent: storedDevice.deviceInfo.agent || {},
+        network: storedDevice.deviceInfo.network || {},
+        storage: storedDevice.deviceInfo.storage || {},
+        health: storedDevice.deviceInfo.health || {},
+
+        // 版本信息（简化显示）
+        versions,
+
+        // 部署信息（新的配置结构）
+        deploy: {
+          capabilities: deployInfo.capabilities || {
+            rollbackAvailable: deployInfo.rollbackAvailable || false,
+            supportedProjects: ['frontend', 'backend']
+          },
+          currentDeployments,
+          previousDeployments: deployInfo.previousDeployments || {
+            frontend: { version: null, deployPath: null, packageInfo: null, rollbackDate: null },
+            backend: { version: null, deployPath: null, packageInfo: null, rollbackDate: null }
+          },
+          deploymentHistory: deployInfo.deploymentHistory || [],
+          lastDeployStatus: deployInfo.lastDeployStatus || null,
+          lastDeployAt: deployInfo.lastDeployAt || null,
+          lastRollbackAt: deployInfo.lastRollbackAt || null
+        },
+        hasDeployPath,
+
+        // 连接信息（使用实时数据）
+        connectedAt: liveDevice?.connectedAt || null,
+        disconnectedAt: liveDevice?.disconnectedAt || null,
+        lastHeartbeat: liveDevice?.lastHeartbeat || null,
+
+        // WiFi信息（简化字段用于表格显示）
+        wifiName: storedDevice.deviceInfo.network?.wifiName,
+        wifiSignal: storedDevice.deviceInfo.network?.wifiSignal,
+        publicIp: storedDevice.deviceInfo.network?.publicIp,
+
+        // 升级历史
+        upgradeHistory: storedDevice.upgradeHistory || []
+      };
+    });
     
     // 状态筛选
     if (status && status !== 'all') {
@@ -85,79 +172,6 @@ async function getDevices(ctx) {
   }
 }
 
-/**
- * 获取设备详情
- */
-async function getDeviceDetail(ctx) {
-  const { deviceId } = ctx.params;
-  
-  try {
-    const device = deviceManager.getDevice(deviceId);
-    
-    if (!device) {
-      ctx.status = 404;
-      ctx.body = {
-        success: false,
-        error: '设备不存在'
-      };
-      return;
-    }
-    
-    // 获取设备配置信息
-    const deployConfig = await deviceConfig.getDeviceDeployPath(deviceId);
-    
-    ctx.body = {
-      success: true,
-      device: {
-        deviceId,
-        deviceName: device.info.deviceName,
-        version: device.info.version,
-        system: {
-          platform: device.info.platform,
-          osVersion: device.info.osVersion || null,
-          arch: device.info.arch || null
-        },
-        agent: {
-          agentVersion: device.info.agentVersion || null
-        },
-        network: {
-          wifiName: device.info.network?.wifiName ?? null,
-          wifiSignal: device.info.network?.wifiSignal ?? null,
-          publicIp: device.info.network?.publicIp ?? null,
-          localIp: device.info.network?.localIp ?? null,
-          macAddresses: device.info.network?.macAddresses ?? []
-        },
-        storage: {
-          diskFreeBytes: device.info.diskFreeBytes ?? null,
-          writable: typeof device.info.writable === 'boolean' ? device.info.writable : null
-        },
-        deploy: {
-          deployPath: deployConfig ? deployConfig.deployPath : null,
-          rollbackAvailable: typeof device.info.rollbackAvailable === 'boolean' ? device.info.rollbackAvailable : null,
-          lastDeployStatus: null,
-          lastDeployAt: null
-        },
-        health: {
-          uptimeSeconds: device.info.uptimeSeconds ?? null
-        },
-        status: device.status,
-        connectedAt: device.connectedAt,
-        disconnectedAt: device.disconnectedAt,
-        lastHeartbeat: device.lastHeartbeat,
-        hasDeployPath: !!deployConfig,
-        info: device.info
-      }
-    };
-    
-  } catch (error) {
-    console.error('获取设备详情失败:', error);
-    ctx.status = 500;
-    ctx.body = {
-      success: false,
-      error: '获取设备详情失败'
-    };
-  }
-}
 
 /**
  * 向设备发送命令
@@ -176,7 +190,32 @@ async function sendCommand(ctx) {
   }
   
   try {
-    const success = deviceManager.sendToDevice(deviceId, command, data);
+    const payload = data && typeof data === 'object' ? { ...data } : {};
+
+    if (command === 'cmd:upgrade') {
+      const project = payload.project;
+      if (!project || !['frontend', 'backend'].includes(project)) {
+        ctx.status = 400;
+        ctx.body = {
+          success: false,
+          error: '升级命令需要有效的 project 参数 (frontend 或 backend)'
+        };
+        return;
+      }
+
+      if (!payload.deployPath) {
+        try {
+          const deployPaths = await getDeviceDeployPaths(deviceId);
+          if (deployPaths && deployPaths[project]) {
+            payload.deployPath = deployPaths[project];
+          }
+        } catch (error) {
+          console.warn(`读取设备 ${deviceId} 部署路径失败:`, error.message);
+        }
+      }
+    }
+
+    const success = deviceManager.sendToDevice(deviceId, command, payload);
     
     if (!success) {
       ctx.status = 404;
@@ -189,7 +228,9 @@ async function sendCommand(ctx) {
     
     ctx.body = {
       success: true,
-      message: '命令发送成功'
+      message: '命令发送成功',
+      command,
+      data: payload
     };
     
   } catch (error) {
@@ -202,98 +243,9 @@ async function sendCommand(ctx) {
   }
 }
 
-/**
- * 设置设备的原部署目录路径
- */
-async function setDeployPath(ctx) {
-  const { deviceId } = ctx.params;
-  const { deployPath } = ctx.request.body;
-  
-  if (!deployPath) {
-    ctx.status = 400;
-    ctx.body = {
-      success: false,
-      error: '原部署目录路径不能为空'
-    };
-    return;
-  }
-  
-  try {
-    // 检查设备是否存在（不要求设备在线）
-    const device = deviceManager.getDevice(deviceId);
-    if (!device) {
-      ctx.status = 404;
-      ctx.body = {
-        success: false,
-        error: '设备不存在'
-      };
-      return;
-    }
-    
-    const config = await deviceConfig.setDeviceDeployPath(deviceId, deployPath);
-    
-    // 如果设备在线，实时通知设备端以便立刻检测 storage 并上报
-    try {
-      deviceManager.sendToDevice(deviceId, 'config:deploy-path', { deployPath });
-    } catch (e) {
-      // 忽略通知失败（设备可能离线），不影响接口成功
-    }
-    
-    ctx.body = {
-      success: true,
-      message: '原部署目录路径设置成功',
-      config: {
-        deviceId,
-        deployPath: config.deployPath,
-        updatedAt: config.updatedAt,
-        createdAt: config.createdAt
-      }
-    };
-    
-  } catch (error) {
-    console.error('设置设备配置失败:', error);
-    ctx.status = 500;
-    ctx.body = {
-      success: false,
-      error: error.message || '设置设备配置失败'
-    };
-  }
-}
 
-/**
- * 获取设备配置
- */
-async function getDeployPath(ctx) {
-  const { deviceId } = ctx.params;
-  
-  try {
-    const config = await deviceConfig.getDeviceDeployPath(deviceId);
-    
-    ctx.body = {
-      success: true,
-      config: config ? {
-        deviceId,
-        deployPath: config.deployPath,
-        updatedAt: config.updatedAt,
-        createdAt: config.createdAt
-      } : null,
-      hasConfig: !!config
-    };
-    
-  } catch (error) {
-    console.error('获取设备配置失败:', error);
-    ctx.status = 500;
-    ctx.body = {
-      success: false,
-      error: '获取设备配置失败'
-    };
-  }
-}
 
 export {
   getDevices,
-  getDeviceDetail,
-  sendCommand,
-  setDeployPath,
-  getDeployPath
+  sendCommand
 };

@@ -30,46 +30,40 @@ async function getPackages(ctx) {
   try {
     // 先同步文件系统确保配置文件是最新的
     await syncPackagesFromFileSystem();
-    
+
+    // 获取包配置数据
+    const config = await getConfig();
+
     const packages = [];
     const projects = project ? [project] : ['frontend', 'backend'];
-    
+
     for (const proj of projects) {
       const packageDir = path.join(__dirname, '../../uploads/packages', proj);
-      const manifestDir = path.join(__dirname, '../../manifests', proj);
-      
+
       if (!await fs.pathExists(packageDir)) {
         continue;
       }
-      
+
       const files = await fs.readdir(packageDir);
-      
+
       for (const fileName of files) {
         const filePath = path.join(packageDir, fileName);
         const stats = await fs.stat(filePath);
-        
+
         if (!stats.isFile()) continue;
-        
-        // 尝试读取 manifest 文件
-        const manifestPath = path.join(manifestDir, `${fileName}.manifest.json`);
-        let manifest = null;
-        
-        if (await fs.pathExists(manifestPath)) {
-          try {
-            manifest = await fs.readJSON(manifestPath);
-          } catch (error) {
-            console.warn(`读取 manifest 失败: ${manifestPath}`, error.message);
-          }
-        }
-        
+
+        // 从包配置文件中获取包信息
+        const packageInfo = config.packages[proj]?.packages[fileName];
+
         packages.push({
           project: proj,
           fileName,
           fileSize: stats.size,
-          fileMD5: manifest ? manifest.fileMD5 : null,
-          packagePath: path.join('packages', proj, fileName),
-          manifestPath: manifest ? path.join('manifests', proj, `${fileName}.manifest.json`) : null,
-          manifest
+          fileMD5: packageInfo?.fileMD5 || null,
+          version: packageInfo?.version || null,
+          uploadedAt: packageInfo?.uploadedAt || null,
+          uploadedBy: packageInfo?.uploadedBy || null,
+          packagePath: path.join('packages', proj, fileName)
         });
       }
     }
@@ -110,8 +104,7 @@ async function getPackageDetail(ctx) {
   
   try {
     const packagePath = path.join(__dirname, '../../uploads/packages', project, fileName);
-    const manifestPath = path.join(__dirname, '../../manifests', project, `${fileName}.manifest.json`);
-    
+
     if (!await fs.pathExists(packagePath)) {
       ctx.status = 404;
       ctx.body = {
@@ -120,28 +113,24 @@ async function getPackageDetail(ctx) {
       };
       return;
     }
-    
+
     const stats = await fs.stat(packagePath);
-    let manifest = null;
-    
-    if (await fs.pathExists(manifestPath)) {
-      try {
-        manifest = await fs.readJSON(manifestPath);
-      } catch (error) {
-        console.warn(`读取 manifest 失败: ${manifestPath}`, error.message);
-      }
-    }
-    
+
+    // 获取包配置数据
+    const config = await getConfig();
+    const packageInfo = config.packages[project]?.packages[fileName];
+
     ctx.body = {
       success: true,
       package: {
         project,
         fileName,
         fileSize: stats.size,
-        fileMD5: manifest ? manifest.fileMD5 : null,
-        packagePath: path.join('packages', project, fileName),
-        manifestPath: manifest ? path.join('manifests', project, `${fileName}.manifest.json`) : null,
-        manifest
+        fileMD5: packageInfo?.fileMD5 || null,
+        version: packageInfo?.version || null,
+        uploadedAt: packageInfo?.uploadedAt || null,
+        uploadedBy: packageInfo?.uploadedBy || null,
+        packagePath: path.join('packages', project, fileName)
       }
     };
     
@@ -172,7 +161,6 @@ async function deletePackage(ctx) {
   
   try {
     const packagePath = path.join(__dirname, '../../uploads/packages', project, fileName);
-    const manifestPath = path.join(__dirname, '../../manifests', project, `${fileName}.manifest.json`);
     
     if (!await fs.pathExists(packagePath)) {
       ctx.status = 404;
@@ -185,11 +173,6 @@ async function deletePackage(ctx) {
     
     // 删除包文件
     await fs.remove(packagePath);
-    
-    // 删除 manifest 文件（如果存在）
-    if (await fs.pathExists(manifestPath)) {
-      await fs.remove(manifestPath);
-    }
     
     // 从配置文件中删除记录
     await removePackageRecord(project, fileName);

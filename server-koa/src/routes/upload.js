@@ -30,6 +30,10 @@ const router = new Router({
  *                 enum: [frontend, backend]
  *                 description: 项目类型
  *                 example: "frontend"
+ *               version:
+ *                 type: string
+ *                 description: 可选，应用版本号（如 v1.2.3 或 1.2.3）
+ *                 example: "v1.2.3"
  *             required: [file, project]
  *     responses:
  *       200:
@@ -55,6 +59,10 @@ const router = new Router({
  *                 fileName:
  *                   type: string
  *                   example: "frontend-v1.0.0.zip"
+ *                 version:
+ *                   type: string
+ *                   description: 记录的包版本（回显）
+ *                   example: "v1.0.0"
  *                 fileSize:
  *                   type: integer
  *                   example: 10485760
