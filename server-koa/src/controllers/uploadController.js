@@ -1,12 +1,20 @@
 // 中文注释：ESM 导入
+import fs from 'fs-extra'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import fs from 'fs-extra'
-import { calculateFileHash } from '../utils/crypto.js'
 import { addPackageRecord } from '../models/packageConfig.js'
+import { calculateFileHash } from '../utils/crypto.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// 安全常量
+const SECURITY_CONSTANTS = {
+  allowedExtensions: ['.zip', '.tar', '.gz', '.tgz'],
+  maxFileNameLength: 100,
+  forbiddenChars: /[<>:"/|?*\u0000-\u001f]/g,
+  pathTraversalPattern: /\.\.|\//g
+}
 
 /**
  * 从文件名中提取版本号
@@ -35,9 +43,12 @@ function normalizeVersion(version) {
  */
 async function directUpload(ctx) {
   // Multer 中间件将文本字段放在 ctx.request.body，文件放在 ctx.file
-  console.log('调试信息 - ctx.request.body:', ctx.request.body)
-  console.log('调试信息 - ctx.file:', ctx.file)
-  console.log('调试信息 - project 类型:', typeof ctx.request.body.project)
+  // 仅在开发环境显示调试信息
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('调试信息 - ctx.request.body:', ctx.request.body)
+    console.log('调试信息 - ctx.file:', ctx.file)
+    console.log('调试信息 - project 类型:', typeof ctx.request.body.project)
+  }
 
   const { project } = ctx.request.body
   // 中文注释：前端可选传入的版本号
@@ -68,7 +79,29 @@ async function directUpload(ctx) {
     const packageDir = path.join(__dirname, '../../uploads/packages', project)
     await fs.ensureDir(packageDir)
 
-    const targetPath = path.join(packageDir, file.originalname)
+    // 安全验证文件名
+    const safeFileName = sanitizeFileName(file.originalname)
+    if (!safeFileName) {
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: '文件名无效或包含非法字符'
+      }
+      return
+    }
+
+    // 检查文件扩展名
+    const fileExt = path.extname(safeFileName).toLowerCase()
+    if (!SECURITY_CONSTANTS.allowedExtensions.includes(fileExt)) {
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: `不支持的文件类型，只支持: ${SECURITY_CONSTANTS.allowedExtensions.join(', ')}`
+      }
+      return
+    }
+
+    const targetPath = path.join(packageDir, safeFileName)
 
     // 将文件从内存缓冲区写入磁盘
     await fs.writeFile(targetPath, file.buffer)
@@ -81,18 +114,21 @@ async function directUpload(ctx) {
     for (const existingFile of existingFiles) {
       if (existingFile !== file.originalname) {
         const existingPath = path.join(packageDir, existingFile)
+        // eslint-disable-next-line no-await-in-loop -- 顺序处理文件比较避免并发冲突
         const existingStat = await fs.stat(existingPath)
         if (existingStat.size === file.size) {
+          // eslint-disable-next-line no-await-in-loop -- 顺序处理文件比较避免并发冲突
           const existingMD5 = await calculateFileHash(existingPath)
           if (existingMD5 === fileMD5) {
             // 发现重复文件，删除刚上传的文件
+            // eslint-disable-next-line no-await-in-loop -- 顺序处理文件删除避免并发冲突
             await fs.unlink(targetPath)
             ctx.body = {
               success: true,
               done: true,
               message: `文件已存在（${existingFile}），秒传成功`,
               fileMD5,
-              fileName: file.originalname,
+              fileName: safeFileName,
               fileSize: file.size,
               packagePath: path.relative(path.join(__dirname, '../..'), existingPath)
             }
@@ -124,7 +160,7 @@ async function directUpload(ctx) {
     await addPackageRecord({
       project,
       version: version || 'unknown',
-      fileName: file.originalname,
+      fileName: safeFileName,
       filePath: path.relative(path.join(__dirname, '../..'), targetPath),
       fileSize: file.size,
       fileMD5,
@@ -137,7 +173,7 @@ async function directUpload(ctx) {
       message: '文件上传完成',
       version,
       fileMD5,
-      fileName: file.originalname,
+      fileName: safeFileName,
       fileSize: file.size,
       packagePath: path.relative(path.join(__dirname, '../..'), targetPath)
     }
@@ -149,6 +185,35 @@ async function directUpload(ctx) {
       error: `上传失败: ${error.message}`
     }
   }
+}
+
+/**
+ * 清理文件名，防止路径遭历攻击
+ */
+function sanitizeFileName(fileName) {
+  if (!fileName || typeof fileName !== 'string') {
+    return null
+  }
+
+  // 检查文件名长度
+  if (fileName.length > SECURITY_CONSTANTS.maxFileNameLength) {
+    return null
+  }
+
+  // 移除路径遭历字符
+  if (SECURITY_CONSTANTS.pathTraversalPattern.test(fileName)) {
+    return null
+  }
+
+  // 移除禁止的字符
+  const cleaned = fileName.replace(SECURITY_CONSTANTS.forbiddenChars, '')
+
+  // 检查清理后的文件名是否仍然有效
+  if (!cleaned || cleaned.length === 0 || cleaned.startsWith('.')) {
+    return null
+  }
+
+  return cleaned
 }
 
 export { directUpload }

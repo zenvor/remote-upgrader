@@ -1,10 +1,9 @@
 // 重构后的设备管理器 - 作为协调器，组合各个专门的管理器
 import { ErrorLogger } from '../utils/common.js'
+import { DeviceDataSync } from './deviceDataSync.js'
 import { DeviceRegistry } from './deviceRegistry.js'
 import { HeartbeatManager } from './heartbeatManager.js'
 import { MessageRouter } from './messageRouter.js'
-import { DeviceDataSync } from './deviceDataSync.js'
-import { saveDeviceInfo } from './deviceStorage.js'
 
 export default class DeviceManager {
   constructor() {

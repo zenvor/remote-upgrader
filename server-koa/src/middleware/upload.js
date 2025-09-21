@@ -1,7 +1,5 @@
 // 中文注释：ESM 导入
-import path from 'node:path'
 import multer from '@koa/multer'
-import fs from 'fs-extra'
 
 // 自定义存储引擎，用于处理直接上传
 const storage = multer.memoryStorage() // 使用内存存储，手动控制文件保存

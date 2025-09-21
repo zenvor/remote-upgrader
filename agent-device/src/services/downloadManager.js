@@ -1,8 +1,8 @@
 // 中文注释：ESM 导入
-import path from 'node:path'
-import crypto from 'node:crypto'
 import axios from 'axios'
 import fs from 'fs-extra'
+import crypto from 'node:crypto'
+import path from 'node:path'
 import { ErrorLogger } from '../utils/common.js'
 
 export default class DownloadManager {
@@ -31,11 +31,7 @@ export default class DownloadManager {
   }
 
   validateConfig() {
-    const requiredFields = [
-      'server.url',
-      'download.tempDir',
-      'download.packageDir'
-    ]
+    const requiredFields = ['server.url', 'download.tempDir', 'download.packageDir']
 
     for (const field of requiredFields) {
       const value = this.getNestedValue(this.config, field)
@@ -152,9 +148,10 @@ export default class DownloadManager {
 
       return new Promise((resolve, reject) => {
         // 正确创建写入流
-        writeStream = downloadedBytes > 0
-          ? fs.createWriteStream(temporaryPath, { flags: 'a' })
-          : fs.createWriteStream(temporaryPath)
+        writeStream =
+          downloadedBytes > 0
+            ? fs.createWriteStream(temporaryPath, { flags: 'a' })
+            : fs.createWriteStream(temporaryPath)
 
         response.data.pipe(writeStream)
 
@@ -257,7 +254,8 @@ export default class DownloadManager {
       const files = await fs.readdir(this.tempDir)
       const now = Date.now()
 
-      for (const file of files) {
+      // 并行处理临时文件清理，提高性能
+      const cleanupPromises = files.map(async (file) => {
         const filePath = path.join(this.tempDir, file)
 
         try {
@@ -266,12 +264,23 @@ export default class DownloadManager {
           if (now - stats.mtimeMs > this.constants.tempFileMaxAge) {
             await fs.remove(filePath)
             console.log(`清理临时文件: ${file}`)
+            return { success: true, file, action: 'deleted' }
           }
+          return { success: true, file, action: 'kept' }
         } catch (fileError) {
           // 单个文件处理失败不影响其他文件
           ErrorLogger.logError('处理临时文件失败', fileError, { filePath })
+          return { success: false, file, error: fileError.message }
         }
-      }
+      })
+
+      const results = await Promise.allSettled(cleanupPromises)
+      const successCount = results.filter((r) => r.status === 'fulfilled' && r.value.success).length
+      const deletedCount = results.filter(
+        (r) => r.status === 'fulfilled' && r.value.success && r.value.action === 'deleted'
+      ).length
+
+      console.log(`✅ 临时文件清理完成: 处理 ${successCount}/${files.length} 个文件，删除 ${deletedCount} 个过期文件`)
     } catch (error) {
       ErrorLogger.logError('清理临时文件失败', error, { tempDir: this.tempDir })
     }

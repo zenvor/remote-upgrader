@@ -1,9 +1,9 @@
 // 中文注释：ESM 导入
-import path from 'node:path'
-import { spawn } from 'node:child_process'
 import fs from 'fs-extra'
+import { spawn } from 'node:child_process'
+import path from 'node:path'
+import { BackupHelper, DeployResult, ErrorLogger, FileHelper, VersionHelper } from '../utils/common.js'
 import { defaultPathValidator } from '../utils/pathValidator.js'
-import { ErrorLogger, FileHelper, DeployResult, BackupHelper, VersionHelper } from '../utils/common.js'
 
 export default class DeployManager {
   constructor(config, agent = null) {
@@ -35,11 +35,7 @@ export default class DeployManager {
   }
 
   validateConfig() {
-    const requiredFields = [
-      'deploy.frontendDir',
-      'deploy.backendDir',
-      'deploy.backupDir'
-    ]
+    const requiredFields = ['deploy.frontendDir', 'deploy.backendDir', 'deploy.backupDir']
 
     for (const field of requiredFields) {
       const value = this.getNestedValue(this.config, field)
@@ -74,7 +70,7 @@ export default class DeployManager {
     }
   }
 
-  async deploy(project, packagePath, version, deployPathOverride = null, fileMD5 = null) {
+  async deploy(project, packagePath, version, deployPathOverride = null) {
     // 参数验证
     if (!project || !packagePath) {
       throw new Error('project 和 packagePath 参数不能为空')
@@ -122,7 +118,7 @@ export default class DeployManager {
       await this.updateVersionInfo(project, version, packagePath, targetDir)
 
       // 4. 更新部署路径配置
-      await this.updateDeployPathConfig(project, targetDir)
+      await this.updateDeployPathConfig(project, targetDir, version)
 
       // 5. 可选清理旧备份（默认保留所有备份）
       if (this.maxBackups && this.maxBackups > 0) {
@@ -436,10 +432,10 @@ export default class DeployManager {
    * 显示文件数量、文件列表、大小、权限等信息
    */
   async checkDirectoryStatus(targetDir, stage = '') {
-    try {
-      // 确保使用绝对路径
-      const absoluteTargetDir = path.isAbsolute(targetDir) ? targetDir : path.resolve(targetDir)
+    // 确保使用绝对路径
+    const absoluteTargetDir = path.isAbsolute(targetDir) ? targetDir : path.resolve(targetDir)
 
+    try {
       if (!(await fs.pathExists(absoluteTargetDir))) {
         console.log(`📂 ${stage} 目录不存在: ${absoluteTargetDir}`)
         return
@@ -456,41 +452,60 @@ export default class DeployManager {
         return
       }
 
-      // 分类统计文件和目录
+      // 并行统计文件和目录信息，提高性能
+      const fileStats = await Promise.allSettled(
+        files.map(async (file) => {
+          const filePath = path.join(absoluteTargetDir, file)
+          try {
+            const stat = await fs.stat(filePath)
+            const isDir = stat.isDirectory()
+
+            // 获取权限信息（仅Linux/macOS）
+            let permissions = ''
+            if (process.platform !== 'win32') {
+              const { mode } = stat
+              permissions = '0' + (mode & 0o777).toString(8)
+            }
+
+            return {
+              name: file,
+              type: isDir ? '目录' : '文件',
+              size: isDir ? '-' : this.formatFileSize(stat.size),
+              permissions: permissions || 'N/A',
+              modified: stat.mtime.toLocaleString('zh-CN'),
+              isDir,
+              fileSize: stat.size
+            }
+          } catch (statError) {
+            console.warn(`⚠️ 无法获取文件信息: ${file} - ${statError.message}`)
+            return null
+          }
+        })
+      )
+
+      // 处理统计结果
       let fileCount = 0
       let dirCount = 0
       let totalSize = 0
       const fileDetails = []
 
-      for (const file of files) {
-        const filePath = path.join(absoluteTargetDir, file)
-        try {
-          const stat = await fs.stat(filePath)
-          const isDir = stat.isDirectory()
+      for (const result of fileStats) {
+        if (result.status === 'fulfilled' && result.value) {
+          const fileInfo = result.value
+          fileDetails.push({
+            name: fileInfo.name,
+            type: fileInfo.type,
+            size: fileInfo.size,
+            permissions: fileInfo.permissions,
+            modified: fileInfo.modified
+          })
 
-          if (isDir) {
+          if (fileInfo.isDir) {
             dirCount++
           } else {
             fileCount++
-            totalSize += stat.size
+            totalSize += fileInfo.fileSize
           }
-
-          // 获取权限信息（仅Linux/macOS）
-          let permissions = ''
-          if (process.platform !== 'win32') {
-            const { mode } = stat
-            permissions = '0' + (mode & 0o777).toString(8)
-          }
-
-          fileDetails.push({
-            name: file,
-            type: isDir ? '目录' : '文件',
-            size: isDir ? '-' : this.formatFileSize(stat.size),
-            permissions: permissions || 'N/A',
-            modified: stat.mtime.toLocaleString('zh-CN')
-          })
-        } catch (statError) {
-          console.warn(`⚠️ 无法获取文件信息: ${file} - ${statError.message}`)
         }
       }
 
@@ -577,12 +592,14 @@ export default class DeployManager {
   async forceEmptyDirectory(targetDir, fileList) {
     console.log(`🔧 方法2：手动删除所有文件...`)
 
-    // 策略1：使用 fs.remove 逐个删除
+    // 策略1：使用 fs.remove 逐个删除（顺序处理避免文件系统冲突）
     let remainingFiles = [...fileList]
     for (const file of fileList) {
       const filePath = path.join(targetDir, file)
       try {
+        // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
         const stat = await fs.stat(filePath)
+        // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
         await fs.remove(filePath)
         remainingFiles = remainingFiles.filter((f) => f !== file)
         console.log(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
@@ -764,12 +781,22 @@ export default class DeployManager {
   async performRollback(project, backupPath) {
     let targetDir
     try {
-      // 尝试从备份信息中获取原始目标目录
-      const info = await fs.readJson(path.join(backupPath, 'backup-info.json')).catch(() => ({}))
-      const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
-      targetDir = info.sourceDir || defaultTarget
+      // 优先使用当前配置的部署路径
+      const actualDeployPath = await this.getActualDeployPath(project)
+
+      if (actualDeployPath) {
+        targetDir = actualDeployPath
+        console.log(`📋 使用配置记录的部署路径: ${targetDir}`)
+      } else {
+        // 尝试从备份信息中获取原始目标目录
+        const info = await fs.readJson(path.join(backupPath, 'backup-info.json')).catch(() => ({}))
+        const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
+        targetDir = info.sourceDir || defaultTarget
+        console.log(`📋 使用${info.sourceDir ? '备份记录的' : '默认'}部署路径: ${targetDir}`)
+      }
     } catch {
       targetDir = project === 'frontend' ? this.frontendDir : this.backendDir
+      console.log(`📋 使用默认部署路径: ${targetDir}`)
     }
 
     console.log(`📂 目标目录: ${targetDir}`)
@@ -865,17 +892,27 @@ export default class DeployManager {
     const backupPath = await this.findBackupForRollback(project)
     if (backupPath) {
       try {
-        const infoPath = path.join(backupPath, 'backup-info.json')
-        const info = await fs.readJson(infoPath).catch(() => ({}))
-        const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
-        const targetDir = info.sourceDir || defaultTarget
+        // 优先使用当前配置的部署路径
+        const actualDeployPath = await this.getActualDeployPath(project)
+        let targetDir
+
+        if (actualDeployPath) {
+          targetDir = actualDeployPath
+        } else {
+          const infoPath = path.join(backupPath, 'backup-info.json')
+          const info = await fs.readJson(infoPath).catch(() => ({}))
+          const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
+          targetDir = info.sourceDir || defaultTarget
+        }
+
         await fs.emptyDir(targetDir)
         await fs.copy(backupPath, targetDir, {
           overwrite: true,
           filter: (src) => !src.endsWith('backup-info.json')
         })
       } catch {
-        const targetDir = project === 'frontend' ? this.frontendDir : this.backendDir
+        const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
+        const targetDir = await this.getActualDeployPath(project).catch(() => defaultTarget) || defaultTarget
         await fs.copy(backupPath, targetDir, { overwrite: true })
       }
     }
@@ -949,6 +986,30 @@ export default class DeployManager {
   }
 
   /**
+   * 获取配置文件中记录的部署版本
+   */
+  async getActualDeployVersion(project) {
+    // 参数验证
+    if (!project) {
+      throw new Error('project 参数不能为空')
+    }
+    try {
+      // 使用配置的配置目录路径
+      const deployPathsFile = path.join(this.constants.configDir, this.constants.deployPathsConfigFile)
+
+      if (await fs.pathExists(deployPathsFile)) {
+        const deployPaths = await fs.readJson(deployPathsFile)
+        return deployPaths[project]?.version || null
+      }
+
+      return null
+    } catch (error) {
+      console.warn(`读取部署版本配置失败: ${error.message}`)
+      return null
+    }
+  }
+
+  /**
    * 初始化部署路径配置文件
    */
   async initializeDeployPathsConfig() {
@@ -984,7 +1045,7 @@ export default class DeployManager {
   /**
    * 更新部署路径配置文件
    */
-  async updateDeployPathConfig(project, deployPath) {
+  async updateDeployPathConfig(project, deployPath, version = null) {
     // 参数验证
     if (!project || !deployPath) {
       throw new Error('project 和 deployPath 参数不能为空')
@@ -1001,8 +1062,9 @@ export default class DeployManager {
       // 确保项目配置存在
       deployPaths[project] ||= {}
 
-      // 更新部署路径和时间戳
+      // 更新部署路径、版本号和时间戳
       deployPaths[project].deployPath = deployPath
+      deployPaths[project].version = version
       deployPaths[project].updatedAt = new Date().toISOString()
 
       // 确保配置目录存在
@@ -1011,10 +1073,10 @@ export default class DeployManager {
       // 写入配置文件
       await fs.writeJson(deployPathsFile, deployPaths, { spaces: 2 })
 
-      console.log(`✅ 更新部署路径配置: ${project} -> ${deployPath}`)
+      console.log(`✅ 更新部署路径配置: ${project} -> ${deployPath}${version ? ` (版本: ${version})` : ''}`)
 
       // 通知服务器端部署路径已更新
-      await this.notifyServerDeployPathUpdate(project, deployPath)
+      await this.notifyServerDeployPathUpdate(project, deployPath, version)
     } catch (error) {
       console.warn(`更新部署路径配置失败: ${error.message}`)
     }
@@ -1023,7 +1085,7 @@ export default class DeployManager {
   /**
    * 通知服务器端部署路径已更新
    */
-  async notifyServerDeployPathUpdate(project, deployPath) {
+  async notifyServerDeployPathUpdate(project, deployPath, version = null) {
     try {
       if (!this.agent || !this.agent.socketHandler) {
         console.warn('无法通知服务器：缺少 agent 或 socket 连接')
@@ -1035,13 +1097,14 @@ export default class DeployManager {
         data: {
           project,
           deployPath,
+          version,
           updatedAt: new Date().toISOString()
         }
       }
 
       // 通过 socket 发送通知
       this.agent.socketHandler.sendNotification('deployPathUpdated', notification)
-      console.log(`📡 已通知服务器：${project} 部署路径更新为 ${deployPath}`)
+      console.log(`📡 已通知服务器：${project} 部署路径更新为 ${deployPath}${version ? ` (版本: ${version})` : ''}`)
     } catch (error) {
       console.warn(`通知服务器失败: ${error.message}`)
     }
@@ -1073,12 +1136,23 @@ export default class DeployManager {
 
         console.log(`🗑 开始清理 ${project} 的旧备份，保留最新 ${this.maxBackups} 个备份`)
 
-        for (const backup of toDelete) {
-          await fs.remove(backup.path)
-          console.log(`♻️ 已清理旧备份: ${backup.name}`)
-        }
+        // 并行删除旧备份，提高性能
+        const deletePromises = toDelete.map(async (backup) => {
+          try {
+            await fs.remove(backup.path)
+            console.log(`♻️ 已清理旧备份: ${backup.name}`)
+            return { success: true, backup: backup.name }
+          } catch (error) {
+            console.error(`❌ 清理备份失败 ${backup.name}:`, error.message)
+            return { success: false, backup: backup.name, error: error.message }
+          }
+        })
 
-        console.log(`✅ 清理完成，删除了 ${toDelete.length} 个旧备份`)
+        const results = await Promise.allSettled(deletePromises)
+        const successCount = results.filter((r) => r.status === 'fulfilled' && r.value.success).length
+        const failCount = results.length - successCount
+
+        console.log(`✅ 备份清理完成: 成功 ${successCount} 个，失败 ${failCount} 个`)
       } else {
         console.log(`ℹ️ ${project} 备份数量 (${historicalBackups.length}) 未超过限制 (${this.maxBackups})，无需清理`)
       }

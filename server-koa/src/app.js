@@ -1,31 +1,39 @@
 // 中文注释：加载环境变量配置
+import dotenv from 'dotenv'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import dotenv from 'dotenv'
 
 // 中文注释：ESM 导入与 __dirname 兼容处理
-import Koa from 'koa'
-import Router from '@koa/router'
 import cors from '@koa/cors'
-import bodyParser from 'koa-bodyparser'
-import { Server } from 'socket.io'
-import serve from 'koa-static'
+import Router from '@koa/router'
 import fs from 'fs-extra'
+import Koa from 'koa'
+import bodyParser from 'koa-bodyparser'
+import serve from 'koa-static'
 import { koaSwagger } from 'koa2-swagger-ui'
-import createTimeFormatter from './middleware/timeFormatter.js'
+import { Server } from 'socket.io'
 import swaggerSpec from './config/swagger.js'
-import uploadRouter from './routes/upload.js'
-import packageRouter from './routes/packages.js'
+import { setupSocketHandlers } from './controllers/socketController.js'
+import createTimeFormatter from './middleware/timeFormatter.js'
 import deviceRouter from './routes/devices.js'
 import docsRouter from './routes/docs.js'
+import packageRouter from './routes/packages.js'
+import uploadRouter from './routes/upload.js'
 import versionRouter from './routes/versions.js'
-import { setupSocketHandlers } from './controllers/socketController.js'
 
 dotenv.config()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// 常量配置
+const constants = {
+  staticCacheMaxAge: 1000 * 60 * 60 * 24 * 7, // 7天缓存
+  bodyParserLimit: '50mb', // 请求体大小限制
+  defaultPort: 3000,
+  defaultHost: '0.0.0.0'
+}
 
 const app = new Koa()
 const router = new Router()
@@ -53,8 +61,8 @@ app.use(
 app.use(
   bodyParser({
     enableTypes: ['json', 'form', 'text'],
-    formLimit: '50mb',
-    jsonLimit: '50mb'
+    formLimit: constants.bodyParserLimit,
+    jsonLimit: constants.bodyParserLimit
   })
 )
 
@@ -65,11 +73,27 @@ app.use(createTimeFormatter())
 const staticPath = path.join(__dirname, '..', 'public')
 app.use(
   serve(staticPath, {
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7天缓存
+    maxAge: constants.staticCacheMaxAge,
     index: 'index.html',
     gzip: true
   })
 )
+
+// 安全头中间件
+app.use(async (ctx, next) => {
+  // 设置安全相关的 HTTP 头
+  ctx.set('X-Content-Type-Options', 'nosniff')
+  ctx.set('X-Frame-Options', 'DENY')
+  ctx.set('X-XSS-Protection', '1; mode=block')
+  ctx.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+
+  // 生产环境下强制 HTTPS
+  if (process.env.NODE_ENV === 'production') {
+    ctx.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  }
+
+  await next()
+})
 
 // 错误处理中间件
 app.use(async (ctx, next) => {
@@ -77,10 +101,33 @@ app.use(async (ctx, next) => {
     await next()
   } catch (error) {
     console.error('请求处理错误:', error)
-    ctx.status = error.status || 500
+
+    // 确定错误状态码
+    const status = error.status || error.statusCode || 500
+    ctx.status = status
+
+    // 根据环境决定错误信息详细程度
+    const isDevelopment = process.env.NODE_ENV !== 'production'
+    const errorMessage = isDevelopment
+      ? error.message || '内部服务器错误'
+      : status < 500
+        ? error.message
+        : '服务器内部错误'
+
     ctx.body = {
       success: false,
-      error: error.message || '内部服务器错误'
+      error: errorMessage
+    }
+
+    // 记录详细错误信息（仅服务端）
+    if (status >= 500) {
+      console.error('服务器错误详情:', {
+        message: error.message,
+        stack: error.stack,
+        url: ctx.url,
+        method: ctx.method,
+        ip: ctx.ip
+      })
     }
   }
 })
@@ -132,8 +179,19 @@ async function ensureDirectories() {
     'public' // 静态文件目录
   ]
 
-  for (const dir of dirs) {
-    await fs.ensureDir(path.join(__dirname, '..', dir))
+  try {
+    // 并行创建所有目录，提高性能
+    const dirPromises = dirs.map(async (dir) => {
+      const targetPath = path.join(__dirname, '..', dir)
+      await fs.ensureDir(targetPath)
+      console.log(`✅ 目录确保存在: ${targetPath}`)
+      return targetPath
+    })
+
+    await Promise.all(dirPromises)
+  } catch (error) {
+    console.error('❌ 创建必要目录失败:', error)
+    throw error
   }
 }
 
@@ -141,11 +199,26 @@ async function ensureDirectories() {
 export async function start() {
   await ensureDirectories()
 
-  const port = process.env.PORT || 3000
-  const host = process.env.HOST || '0.0.0.0'
+  const port = Number.parseInt(process.env.PORT) || constants.defaultPort
+  const host = process.env.HOST || constants.defaultHost
 
-  server.listen(port, host, () => {
-    console.log(`远程升级系统服务已启动，地址: ${host}:${port}`)
+  // 参数验证
+  if (port < 1 || port > 65535) {
+    throw new Error(`无效的端口号: ${port}`)
+  }
+
+  return new Promise((resolve, reject) => {
+    server.listen(port, host, (error) => {
+      if (error) {
+        reject(error)
+      } else {
+        console.log(`🚀 远程升级系统服务已启动`)
+        console.log(`📍 监听地址: ${host}:${port}`)
+        console.log(`📖 API文档: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/api-docs`)
+        console.log(`🌍 环境: ${process.env.NODE_ENV || 'development'}`)
+        resolve({ host, port })
+      }
+    })
   })
 }
 

@@ -5,7 +5,8 @@ import {
   getPackageDetail,
   deletePackage,
   downloadPackage,
-  getPackageConfig
+  getPackageConfig,
+  getPackageList
 } from '../controllers/packageController.js'
 
 const router = new Router({
@@ -363,5 +364,109 @@ router.get('/:project/:fileName/download', downloadPackage)
  *               error: "获取配置失败"
  */
 router.get('/config', getPackageConfig)
+
+/**
+ * @swagger
+ * /packages/list:
+ *   get:
+ *     tags: [Packages]
+ *     summary: 获取包列表（升级选择专用）
+ *     description: 获取包列表的简化版本，专门用于设备升级时的包选择，返回格式经过优化以便前端选择器使用
+ *     parameters:
+ *       - name: project
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [frontend, backend]
+ *         description: 项目类型筛选（可选）
+ *         example: "frontend"
+ *     responses:
+ *       200:
+ *         description: 包列表获取成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/ApiResponse'
+ *                 - type: object
+ *                   properties:
+ *                     packages:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                             description: 包的唯一标识（project_fileName）
+ *                           project:
+ *                             type: string
+ *                             enum: [frontend, backend]
+ *                             description: 项目类型
+ *                           fileName:
+ *                             type: string
+ *                             description: 文件名
+ *                           version:
+ *                             type: string
+ *                             description: 包版本
+ *                           fileMD5:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 文件MD5值
+ *                           fileSize:
+ *                             type: integer
+ *                             description: 文件大小（字节）
+ *                           uploadedAt:
+ *                             type: string
+ *                             format: date-time
+ *                             nullable: true
+ *                             description: 上传时间
+ *                           displayName:
+ *                             type: string
+ *                             description: 用于前端显示的友好名称
+ *                       description: 包信息列表
+ *                     total:
+ *                       type: integer
+ *                       description: 包总数
+ *             example:
+ *               success: true
+ *               packages:
+ *                 - id: "frontend_frontend-v1.0.0.zip"
+ *                   project: "frontend"
+ *                   fileName: "frontend-v1.0.0.zip"
+ *                   version: "v1.0.0"
+ *                   fileMD5: "a1b2c3d4e5f6789012345678901234567890abcd"
+ *                   fileSize: 10485760
+ *                   uploadedAt: "2025-09-10T10:30:00.000Z"
+ *                   displayName: "v1.0.0 - frontend-v1.0.0.zip"
+ *                 - id: "backend_backend-v1.0.0.zip"
+ *                   project: "backend"
+ *                   fileName: "backend-v1.0.0.zip"
+ *                   version: "v1.0.0"
+ *                   fileMD5: "1234567890abcdef1234567890abcdef12345678"
+ *                   fileSize: 20971520
+ *                   uploadedAt: "2025-09-10T10:30:00.000Z"
+ *                   displayName: "v1.0.0 - backend-v1.0.0.zip"
+ *               total: 2
+ *       400:
+ *         description: 参数错误
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiResponse'
+ *             example:
+ *               success: false
+ *               error: "project 参数必须是 frontend 或 backend"
+ *       500:
+ *         description: 服务器内部错误
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiResponse'
+ *             example:
+ *               success: false
+ *               error: "获取包列表失败"
+ */
+router.get('/list', getPackageList)
 
 export default router

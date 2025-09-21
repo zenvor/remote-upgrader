@@ -2,13 +2,12 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import 'ant-design-vue/dist/reset.css'
 import './style.less'
-
 import App from './App.vue'
 
 const routes = [
   { path: '/', redirect: '/packages' },
-  { path: '/devices', component: () => import('./views/DevicesView.vue') },
-  { path: '/packages', component: () => import('./views/PackagesView.vue') }
+  { path: '/devices', component: () => import('./views/devices/DevicesView.vue') },
+  { path: '/packages', component: () => import('./views/packages/PackagesView.vue') }
 ]
 
 const router = createRouter({

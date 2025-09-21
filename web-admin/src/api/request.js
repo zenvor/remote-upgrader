@@ -1,11 +1,11 @@
 import axios from 'axios'
-import { BASE_URL } from './config'
+import { BASE_URL } from './config.js'
 // 仅在业务层展示消息，这里不直接引入 UI 组件，避免重复弹窗
 
 // 默认配置
 const defaultConfig = {
   baseURL: BASE_URL,
-  timeout: 10000,
+  timeout: 10_000,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -25,11 +25,16 @@ const createAxiosInstance = (config = {}) => {
 const handleError = (message) => {
   if (message === 'Network Error') {
     return '后端接口连接异常'
-  } else if (message.includes('timeout')) {
-    return '系统接口请求超时'
-  } else if (message.includes('请求失败，状态码错误')) {
-    return '系统接口 ' + message.substr(message.length - 3) + ' 异常'
   }
+
+  if (message.includes('timeout')) {
+    return '系统接口请求超时'
+  }
+
+  if (message.includes('请求失败，状态码错误')) {
+    return '系统接口 ' + message.slice(-3) + ' 异常'
+  }
+
   return message
 }
 
@@ -57,7 +62,7 @@ const errorHandler = (error) => {
 
   // 判断是否是 HTTP 响应错误
   if (error.response) {
-    const status = error.response.status
+    const { status } = error.response
     const { data, config } = error.response
 
     // 记录详细的 HTTP 错误信息
@@ -65,7 +70,7 @@ const errorHandler = (error) => {
       status,
       url: config?.url,
       method: config?.method,
-      data: data,
+      data,
       headers: config?.headers
     })
 
@@ -138,9 +143,9 @@ const request = {
    * @param {import('axios').AxiosRequestConfig} [config] - Axios 可选配置
    * @returns {Promise<any>} 响应数据
    */
-  get: (url, params, config = {}) => {
+  get(url, parameters, config = {}) {
     const instance = createRequest(config)
-    return instance.get(url, { params })
+    return instance.get(url, { params: parameters })
   },
 
   /**
@@ -150,7 +155,7 @@ const request = {
    * @param {import('axios').AxiosRequestConfig} [config] - Axios 可选配置
    * @returns {Promise<any>} 响应数据
    */
-  post: (url, data, config = {}) => {
+  post(url, data, config = {}) {
     const instance = createRequest(config)
     return instance.post(url, data)
   },
@@ -162,7 +167,7 @@ const request = {
    * @param {import('axios').AxiosRequestConfig} [config] - Axios 可选配置
    * @returns {Promise<any>} 响应数据
    */
-  put: (url, data, config = {}) => {
+  put(url, data, config = {}) {
     const instance = createRequest(config)
     return instance.put(url, data)
   },
@@ -174,7 +179,7 @@ const request = {
    * @param {import('axios').AxiosRequestConfig} [config] - Axios 可选配置
    * @returns {Promise<any>} 响应数据
    */
-  delete: (url, data, config = {}) => {
+  delete(url, data, config = {}) {
     const instance = createRequest(config)
     return instance.delete(url, { data })
   },
@@ -185,7 +190,7 @@ const request = {
    * @param {import('axios').AxiosRequestConfig} config - Axios 实例配置
    * @returns {import('axios').AxiosInstance} Axios 实例
    */
-  createInstance: (config) => {
+  createInstance(config) {
     return createRequest(config)
   },
 
@@ -196,7 +201,7 @@ const request = {
    * @param {Function} cancelToken - 取消令牌函数
    * @returns {any} SDK 返回值
    */
-  cancelRequest: (cancelToken) => {
+  cancelRequest(cancelToken) {
     const instance = createRequest()
     return instance.cancelToken(cancelToken)
   }

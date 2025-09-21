@@ -1,4 +1,4 @@
-import request from '../request'
+import request from '../request.js'
 
 /**
  * 上传管理相关 API - 简化版
@@ -19,8 +19,8 @@ export const directUpload = (file, project, version, onProgress, abortController
     headers: {
       'Content-Type': 'multipart/form-data'
     },
-    timeout: 300000, // 5分钟超时，适应大文件
-    onUploadProgress: (progressEvent) => {
+    timeout: 300_000, // 5分钟超时，适应大文件
+    onUploadProgress(progressEvent) {
       if (onProgress && progressEvent.total) {
         const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
         onProgress({

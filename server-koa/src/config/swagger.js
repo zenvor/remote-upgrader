@@ -16,7 +16,7 @@ const swaggerOptions = {
       description: '支持前后端分开打包的远程升级系统，提供直接上传、设备管理等功能',
       contact: {
         name: 'API 支持',
-        email: 'support@example.com'
+        email: process.env.SUPPORT_EMAIL || 'support@example.com'
       },
       license: {
         name: 'MIT',
@@ -29,7 +29,7 @@ const swaggerOptions = {
         description: '开发环境'
       },
       {
-        url: 'https://api.upgrade.example.com',
+        url: process.env.PRODUCTION_SERVER_URL || 'https://api.upgrade.example.com',
         description: '生产环境'
       }
     ],
@@ -80,222 +80,99 @@ const swaggerOptions = {
               type: 'string',
               description: '包文件路径'
             }
-            // Manifests 机制已废弃，不再暴露相关字段
           }
         },
 
-        // 设备信息
+        // 设备信息（扁平化结构）
         Device: {
           type: 'object',
           properties: {
+            // 基本信息
             deviceId: { type: 'string', description: '设备ID' },
             deviceName: { type: 'string', description: '设备名称' },
-            version: { type: 'string', description: '业务应用版本' },
-            system: {
-              type: 'object',
-              description: '系统信息',
-              properties: {
-                platform: { type: 'string', description: '设备平台' },
-                osVersion: {
-                  type: 'string',
-                  nullable: true,
-                  description: '操作系统版本'
-                },
-                arch: { type: 'string', nullable: true, description: '系统架构' }
-              }
-            },
-            agent: {
-              type: 'object',
-              description: '代理信息',
-              properties: {
-                agentVersion: {
-                  type: 'string',
-                  nullable: true,
-                  description: '设备代理版本'
-                }
-              }
-            },
             status: {
               type: 'string',
-              enum: ['online', 'offline'],
+              enum: ['online', 'offline', 'upgrading', 'error'],
               description: '设备状态'
             },
-            connectedAt: {
-              type: 'string',
-              format: 'date-time',
-              description: '连接时间'
+
+            // 系统信息（扁平化）
+            platform: { type: 'string', nullable: true, description: '设备平台' },
+            osVersion: { type: 'string', nullable: true, description: '操作系统版本' },
+            arch: { type: 'string', nullable: true, description: '系统架构' },
+            agentVersion: { type: 'string', nullable: true, description: '设备代理版本' },
+
+            // 网络信息（扁平化）
+            wifiName: { type: 'string', nullable: true, description: 'WiFi 名称' },
+            wifiSignal: { type: 'number', nullable: true, description: 'WiFi 信号强度' },
+            publicIp: { type: 'string', nullable: true, description: '公网 IP' },
+            localIp: { type: 'string', nullable: true, description: '本地 IP' },
+            macAddresses: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'MAC 地址列表'
             },
-            lastHeartbeat: {
-              type: 'string',
-              format: 'date-time',
-              description: '最后心跳时间'
-            },
-            network: {
+
+            // 版本信息（扁平化）
+            frontendVersion: { type: 'string', nullable: true, description: '前端版本' },
+            backendVersion: { type: 'string', nullable: true, description: '后端版本' },
+            frontendDeployPath: { type: 'string', nullable: true, description: '前端部署路径' },
+            backendDeployPath: { type: 'string', nullable: true, description: '后端部署路径' },
+
+            // 存储信息（扁平化）
+            diskFreeBytes: { type: 'integer', nullable: true, description: '部署分区可用空间（字节）' },
+            writable: { type: 'boolean', nullable: true, description: '部署目录可写' },
+
+            // 健康状态（扁平化）
+            uptimeSeconds: { type: 'integer', nullable: true, description: '运行时长（秒）' },
+
+            // 连接信息
+            connectedAt: { type: 'string', format: 'date-time', nullable: true, description: '连接时间' },
+            disconnectedAt: { type: 'string', format: 'date-time', nullable: true, description: '断开连接时间' },
+            lastHeartbeat: { type: 'string', format: 'date-time', nullable: true, description: '最后心跳时间' },
+
+            // 部署能力标识
+            hasDeployPath: { type: 'boolean', description: '是否已配置部署路径' },
+            rollbackAvailable: { type: 'boolean', nullable: true, description: '可回滚' },
+
+            // 部署详情（用于详情页面显示）
+            deployInfo: {
               type: 'object',
-              description: '网络信息分组',
+              description: '部署详细信息',
               properties: {
-                wifiName: {
-                  type: 'string',
-                  nullable: true,
-                  description: 'WiFi 名称'
-                },
-                wifiSignal: {
-                  type: 'number',
-                  nullable: true,
-                  description: 'WiFi 信号强度'
-                },
-                publicIp: {
-                  type: 'string',
-                  nullable: true,
-                  description: '公网 IP'
-                },
-                localIp: {
-                  type: 'string',
-                  nullable: true,
-                  description: '本地 IP'
-                },
-                macAddresses: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  nullable: true,
-                  description: 'MAC 地址列表'
-                }
-              }
-            },
-            storage: {
-              type: 'object',
-              description: '存储与权限',
-              properties: {
-                diskFreeBytes: {
-                  type: 'integer',
-                  nullable: true,
-                  description: '部署分区可用空间（字节）'
-                },
-                writable: {
-                  type: 'boolean',
-                  nullable: true,
-                  description: '部署目录可写'
-                }
-              }
-            },
-            health: {
-              type: 'object',
-              description: '运行健康',
-              properties: {
-                uptimeSeconds: {
-                  type: 'integer',
-                  nullable: true,
-                  description: '运行时长（秒）'
-                }
-              }
-            },
-            deploy: {
-              type: 'object',
-              description: '部署信息',
-              properties: {
-                rollbackAvailable: {
-                  type: 'boolean',
-                  nullable: true,
-                  description: '可回滚'
-                },
-                lastDeployStatus: {
-                  type: 'string',
-                  nullable: true,
-                  description: '最近部署状态'
-                },
-                lastDeployAt: {
-                  type: 'string',
-                  format: 'date-time',
-                  nullable: true,
-                  description: '最近部署时间'
-                },
-                lastRollbackAt: {
-                  type: 'string',
-                  format: 'date-time',
-                  nullable: true,
-                  description: '最近回滚时间'
-                },
-                currentDeployPaths: {
+                rollbackAvailable: { type: 'boolean', nullable: true, description: '可回滚' },
+                lastDeployStatus: { type: 'string', nullable: true, description: '最近部署状态' },
+                lastDeployAt: { type: 'string', format: 'date-time', nullable: true, description: '最近部署时间' },
+                lastRollbackAt: { type: 'string', format: 'date-time', nullable: true, description: '最近回滚时间' },
+                frontend: {
                   type: 'object',
                   nullable: true,
-                  description: '已记录的部署路径',
+                  description: '前端部署信息',
                   properties: {
-                    frontend: {
-                      type: 'string',
-                      nullable: true,
-                      description: '前端部署路径'
-                    },
-                    backend: {
-                      type: 'string',
-                      nullable: true,
-                      description: '后端部署路径'
-                    }
+                    version: { type: 'string', nullable: true, description: '版本号' },
+                    deployDate: { type: 'string', format: 'date-time', nullable: true, description: '部署时间' },
+                    deployPath: { type: 'string', nullable: true, description: '部署路径' }
                   }
                 },
-                currentVersions: {
+                backend: {
                   type: 'object',
                   nullable: true,
-                  description: '当前版本详情',
+                  description: '后端部署信息',
                   properties: {
-                    frontend: {
-                      type: 'object',
-                      nullable: true,
-                      properties: {
-                        version: {
-                          type: 'string',
-                          nullable: true,
-                          description: '版本号'
-                        },
-                        deployDate: {
-                          type: 'string',
-                          format: 'date-time',
-                          nullable: true,
-                          description: '部署时间'
-                        },
-                        deployPath: {
-                          type: 'string',
-                          nullable: true,
-                          description: '部署路径'
-                        },
-                        packageInfo: {
-                          type: 'object',
-                          nullable: true,
-                          description: '包信息'
-                        }
-                      }
-                    },
-                    backend: {
-                      type: 'object',
-                      nullable: true,
-                      properties: {
-                        version: {
-                          type: 'string',
-                          nullable: true,
-                          description: '版本号'
-                        },
-                        deployDate: {
-                          type: 'string',
-                          format: 'date-time',
-                          nullable: true,
-                          description: '部署时间'
-                        },
-                        deployPath: {
-                          type: 'string',
-                          nullable: true,
-                          description: '部署路径'
-                        },
-                        packageInfo: {
-                          type: 'object',
-                          nullable: true,
-                          description: '包信息'
-                        }
-                      }
-                    }
+                    version: { type: 'string', nullable: true, description: '版本号' },
+                    deployDate: { type: 'string', format: 'date-time', nullable: true, description: '部署时间' },
+                    deployPath: { type: 'string', nullable: true, description: '部署路径' }
                   }
                 }
               }
             },
-            hasDeployPath: { type: 'boolean', description: '是否已配置部署路径' }
+
+            // 升级历史
+            upgradeHistory: {
+              type: 'array',
+              items: { type: 'object' },
+              description: '升级历史记录'
+            }
           }
         },
 

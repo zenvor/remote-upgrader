@@ -17,6 +17,8 @@ export default {
   device: {
     id: null, // 将在运行时通过 DeviceIdGenerator 生成
     name: process.env.DEVICE_NAME || '测试设备', // 设备名称
+    useRealHostname: process.env.USE_REAL_HOSTNAME === 'true', // 是否使用真实主机名（不添加进程ID后缀）
+    preferConfigName: process.env.PREFER_CONFIG_NAME === 'true', // 是否优先使用配置的设备名称而不是系统主机名
     platform: process.platform, // 设备平台
     arch: process.arch // 设备架构
   },

@@ -1,6 +1,6 @@
 // 设备数据同步管理器 - 专门负责设备信息更新和数据持久化同步
 import { ErrorLogger } from '../utils/common.js'
-import { saveDeviceInfo, updateDeviceSystemInfo, updateDeviceHeartbeat } from './deviceStorage.js'
+import { saveDeviceInfo, updateDeviceHeartbeat, updateDeviceSystemInfo } from './deviceStorage.js'
 
 export class DeviceDataSync {
   constructor(deviceRegistry) {
@@ -206,7 +206,7 @@ export class DeviceDataSync {
   /**
    * 同步升级记录
    */
-  async syncUpgradeRecord(deviceId, upgradeData) {
+  async syncUpgradeRecord(deviceId) {
     try {
       // 这里可以调用专门的升级记录存储方法
       console.log(`📝 升级记录已同步: ${deviceId}`)

@@ -1,16 +1,51 @@
 {
+  // 启用 ESLint
+  "eslint.enable": true,
+  // 禁用 XO（已迁移到 ESLint）
+  "xo.enable": false,
+  // 设置默认格式化器为 Prettier
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  // 文件类型关联
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[vue]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  // 显示问题面板
+  "problems.showCurrentInStatus": true,
+  // ESLint 运行时配置
+  "eslint.runtime": "node",
+  // 禁用自动检测，避免路径问题
+  "eslint.autoDetect": false,
+  // 为每个子项目单独配置 ESLint
+  "eslint.workingDirectories": [
+    {
+      "directory": "server-koa",
+      "changeProcessCWD": true
+    },
+    {
+      "directory": "web-admin",
+      "changeProcessCWD": true
+    },
+    {
+      "directory": "agent-device",
+      "changeProcessCWD": true
+    }
+  ],
+  // ESLint 验证文件类型
   "eslint.validate": [
     "javascript",
     "vue"
   ],
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  // 保存时格式化
   "editor.formatOnSave": true,
+  // 保存时自动修复和整理
   "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "explicit"
-  },
-  "eslint.workingDirectories": [
-    "server-koa",
-    "agent-device",
-    "web-admin"
-  ]
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "explicit"
+  }
 }

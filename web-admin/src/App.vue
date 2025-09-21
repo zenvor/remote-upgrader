@@ -16,7 +16,7 @@ const goto = (path) => router.push(path)
         <div class="brand">
           <span class="app-title">远程升级系统</span>
         </div>
-        <a-menu mode="horizontal" :selectedKeys="[active]" @click="({ key }) => goto(key)">
+        <a-menu mode="horizontal" :selected-keys="[active]" @click="({ key }) => goto(key)">
           <a-menu-item key="/devices">设备管理</a-menu-item>
           <a-menu-item key="/packages">包管理</a-menu-item>
         </a-menu>

@@ -8,9 +8,11 @@
     "start": "node src/app.js",
     "dev": "node src/app.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "xo",
-    "lint:fix": "xo --fix",
-    "ci:lint": "xo --max-warnings=0",
+    "lint": "eslint . --cache",
+    "lint:fix": "eslint . --fix --cache",
+    "lint:stats": "eslint . --stats --format json",
+    "lint:timing": "TIMING=1 eslint .",
+    "ci:lint": "eslint . --max-warnings=0 --cache",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prestart:pm2": "node -e \"require('fs').mkdirSync('logs',{recursive:true})\"",
@@ -47,9 +49,14 @@
     "systeminformation": "^5.27.8"
   },
   "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-n": "^17.23.1",
+    "eslint-plugin-promise": "^7.2.1",
     "globals": "^16.4.0",
     "pm2": "^5.3.0",
-    "prettier": "^3.6.2",
-    "xo": "^1.2.2"
+    "prettier": "^3.6.2"
   }
 }

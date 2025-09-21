@@ -1,4 +1,4 @@
-import request from '../request'
+import request from '../request.js'
 
 /**
  * 设备管理相关 API
@@ -6,8 +6,8 @@ import request from '../request'
  */
 
 // 获取设备列表
-export const getDeviceList = (params = {}) => {
-  return request.get('/devices', params)
+export const getDeviceList = (parameters = {}) => {
+  return request.get('/devices', parameters)
 }
 
 // 获取单个设备信息（使用设备列表接口的筛选功能）
@@ -26,6 +26,7 @@ export const getDeviceDetail = (deviceId) => {
           return { device }
         }
       }
+
       throw new Error('设备不存在')
     })
 }

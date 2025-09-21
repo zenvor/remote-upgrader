@@ -3,13 +3,13 @@
     v-model:open="open"
     :title="dialogTitle"
     :width="700"
-    :maskClosable="false"
-    @cancel="cancel"
+    :mask-closable="false"
     destroy-on-close
     ok-text="开始升级"
     cancel-text="取消"
-    @ok="handleSubmit"
     :confirm-loading="upgrading"
+    @cancel="cancel"
+    @ok="handleSubmit"
   >
     <div v-if="targetDevices.length > 0">
       <!-- 目标设备 -->
@@ -56,8 +56,8 @@
               v-model:value="formData.packageName"
               :options="
                 availablePackages.map((o) => ({
-                  label: `${o.fileName} (${formatFileSize(o.fileSize)})`,
-                  value: o.fileName
+                  label: o.displayName,
+                  value: o.id
                 }))
               "
               :loading="loadingPackages"
@@ -108,7 +108,7 @@
         v-if="formData.project && formData.packageName && !preCheckResult"
         style="text-align: center; margin-top: 16px"
       >
-        <a-button @click="runPreCheck" :loading="preChecking"> 预检查 </a-button>
+        <a-button :loading="preChecking" @click="runPreCheck"> 预检查 </a-button>
       </div>
     </div>
   </a-modal>
@@ -116,8 +116,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { usePackages } from '@/composables/usePackages'
-import { useDevices } from '@/composables/useDevices'
+import { deviceApi, packageApi } from '@/api'
 import toast from '@/utils/toast'
 import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
 
@@ -147,11 +146,60 @@ const formData = ref({
   }
 })
 
-// 升级 API（由对话框内部直接提交）
-const { upgradeDevice, batchUpgrade } = useDevices()
+// 升级设备
+const upgradeDevice = async (device, project, packageInfo = null, options = {}) => {
+  try {
+    // 如果没有指定包信息，需要先选择包
+    if (!packageInfo) {
+      console.log(`升级设备 ${device.deviceName} 的 ${project} 项目`)
+      return
+    }
+
+    const response = await deviceApi.upgradeDevice(device.deviceId, {
+      project: packageInfo.project,
+      fileName: packageInfo.fileName,
+      version: packageInfo.version,
+      fileMD5: packageInfo.fileMD5,
+      deployPath: options.deployPath || undefined
+    })
+
+    if (response.success) {
+      toast.success(`设备 "${device.deviceName}" 升级命令已发送`, '升级启动')
+    }
+  } catch (error) {
+    console.error('升级设备失败:', error)
+    toast.error(`设备升级失败: ${error.message}`, '升级失败')
+    throw error
+  }
+}
+
+// 批量升级
+const batchUpgrade = async (deviceList, project, packageInfo, options = {}) => {
+  const promises = deviceList.map((device) => upgradeDevice(device, project, packageInfo, options))
+
+  try {
+    await Promise.all(promises)
+    console.log(`批量升级完成，共 ${deviceList.length} 个设备`)
+  } catch (error) {
+    console.error('批量升级失败:', error)
+    throw error
+  }
+}
 
 // 包管理
-const { packages, fetchPackages } = usePackages()
+const packages = ref([])
+
+/** 获取包列表 */
+const fetchPackages = async () => {
+  try {
+    const response = await packageApi.getPackageListForUpgrade()
+    packages.value = response.packages || []
+  } catch (error) {
+    console.error('获取包列表失败:', error)
+    toast.error(error.message || '获取包列表失败', '包列表')
+    packages.value = []
+  }
+}
 
 // 本地状态（加载/校验）
 const loadingPackages = ref(false)
@@ -208,16 +256,17 @@ const availablePackages = computed(() => {
 
   return packages.value
     .filter((pkg) => pkg.project === formData.value.project)
-    .map((pkg) => ({
-      ...pkg,
-      displayName: `${pkg.fileName} (v${pkg.version || '未知'})`
-    }))
-    .sort((a, b) => (b.fileName || '').localeCompare(a.fileName || ''))
+    .sort((a, b) => {
+      // 按上传时间倒序排列，最新的在前
+      const timeA = new Date(a.uploadedAt || 0).getTime()
+      const timeB = new Date(b.uploadedAt || 0).getTime()
+      return timeB - timeA
+    })
 })
 
 const selectedPackageInfo = computed(() => {
   if (!formData.value?.packageName) return null
-  return availablePackages.value.find((pkg) => pkg.fileName === formData.value.packageName)
+  return availablePackages.value.find((pkg) => pkg.id === formData.value.packageName)
 })
 
 const canUpgrade = computed(() => {
@@ -252,7 +301,7 @@ watch(
     }
     const storedPath = resolveStoredDeployPath(newProject)
     // 为不同项目设置默认路径，优先使用已记录的部署路径
-    formData.value.deployPath = storedPath || (newProject === 'backend' ? '/opt/backend' : '/opt/frontend')
+    formData.value.deployPath = storedPath || null
   }
 )
 
@@ -268,7 +317,7 @@ watch(
     if (storedPath) {
       formData.value.deployPath = storedPath
     } else {
-      formData.value.deployPath = formData.value.project === 'backend' ? '/opt/backend' : '/opt/frontend'
+      formData.value.deployPath = formData.value.project === 'backend' ? null : null
     }
   },
   { deep: true }
@@ -419,16 +468,6 @@ const getStatusLabel = (status) => {
   return labels[status] || status
 }
 
-const getStatusSeverity = (status) => {
-  const severities = {
-    online: 'success',
-    offline: 'secondary',
-    upgrading: 'info',
-    error: 'danger'
-  }
-  return severities[status] || 'secondary'
-}
-
 // 获取状态对应的颜色
 const getStatusColor = (status) => {
   const colors = {
@@ -451,14 +490,6 @@ const formatFileSize = (bytes) => {
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-}
-
-const getProjectLabel = (project) => {
-  const labels = {
-    frontend: '前端项目',
-    backend: '后端项目'
-  }
-  return labels[project] || project
 }
 
 // no upload time display

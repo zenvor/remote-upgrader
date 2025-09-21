@@ -1,7 +1,7 @@
 // 中文注释：包管理配置文件处理模块
+import fs from 'fs-extra'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import fs from 'fs-extra'
 import { DateHelper } from '../utils/common.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -123,8 +123,27 @@ function updatePackageStatistics(config) {
  */
 export async function addPackageRecord(packageInfo) {
   try {
+    // 验证输入参数
+    if (!packageInfo || typeof packageInfo !== 'object') {
+      throw new Error('无效的包信息')
+    }
+
+    const { project, fileName, fileSize } = packageInfo
+
+    // 验证必要字段
+    if (!project || !['frontend', 'backend'].includes(project)) {
+      throw new Error('项目类型必须是frontend或backend')
+    }
+
+    if (!fileName || typeof fileName !== 'string' || fileName.length === 0) {
+      throw new Error('文件名不能为空')
+    }
+
+    if (!fileSize || typeof fileSize !== 'number' || fileSize <= 0) {
+      throw new Error('文件大小必须是正数')
+    }
+
     const config = await getPackageConfig()
-    const { project } = packageInfo
 
     if (!config.packages[project]) {
       throw new Error(`不支持的项目类型: ${project}`)
@@ -151,6 +170,15 @@ export async function addPackageRecord(packageInfo) {
  */
 export async function removePackageRecord(project, fileName) {
   try {
+    // 验证输入参数
+    if (!project || !['frontend', 'backend'].includes(project)) {
+      throw new Error('项目类型必须是frontend或backend')
+    }
+
+    if (!fileName || typeof fileName !== 'string' || fileName.trim().length === 0) {
+      throw new Error('文件名不能为空')
+    }
+
     const config = await getPackageConfig()
 
     if (config.packages[project] && config.packages[project].packages[fileName]) {
@@ -170,6 +198,11 @@ export async function removePackageRecord(project, fileName) {
  */
 export async function getProjectPackages(project) {
   try {
+    // 验证项目类型
+    if (!project || !['frontend', 'backend'].includes(project)) {
+      throw new Error('项目类型必须是frontend或backend')
+    }
+
     const config = await getPackageConfig()
 
     if (!config.packages[project]) {
@@ -194,20 +227,29 @@ export async function syncPackagesFromFileSystem() {
     for (const project of ['frontend', 'backend']) {
       const packageDir = path.join(__dirname, '../../uploads/packages', project)
 
+      // eslint-disable-next-line no-await-in-loop -- 顺序处理目录检查避免并发冲突
       if (!(await fs.pathExists(packageDir))) {
         continue
       }
 
+      // eslint-disable-next-line no-await-in-loop -- 顺序处理目录读取避免并发冲突
       const files = await fs.readdir(packageDir)
 
       for (const fileName of files) {
         const filePath = path.join(packageDir, fileName)
+        // eslint-disable-next-line no-await-in-loop -- 顺序处理文件信息避免并发冲突
         const stats = await fs.stat(filePath)
 
         if (!stats.isFile()) continue
 
         // 如果配置中不存在此包，添加它（但不包含 MD5，需要手动计算）
         if (!updated.packages[project].packages[fileName]) {
+          // 验证文件名安全性
+          if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
+            console.warn(`跳过不安全的文件名: ${fileName}`)
+            continue
+          }
+
           updated.packages[project].packages[fileName] = {
             fileName,
             fileSize: stats.size,

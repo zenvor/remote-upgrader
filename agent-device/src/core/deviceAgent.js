@@ -1,13 +1,13 @@
 // 中文注释：ESM 导入
-import path from 'node:path'
-import os from 'node:os'
-import si from 'systeminformation'
 import fs from 'fs-extra'
+import os from 'node:os'
+import path from 'node:path'
 import { io } from 'socket.io-client'
-import DownloadManager from '../services/downloadManager.js'
+import si from 'systeminformation'
 import DeployManager from '../services/deployManager.js'
-import DeviceIdGenerator from '../utils/deviceId.js'
+import DownloadManager from '../services/downloadManager.js'
 import { DateHelper } from '../utils/common.js'
+import DeviceIdGenerator from '../utils/deviceId.js'
 import SocketHandler from './socketHandler.js'
 
 export default class DeviceAgent {
@@ -184,7 +184,6 @@ export default class DeviceAgent {
     this.scheduleReconnect()
   }
 
-
   scheduleReconnect() {
     // 如果已经有重连定时器，不要重复设置
     if (this.reconnectTimer) {
@@ -272,7 +271,9 @@ export default class DeviceAgent {
       // 先快速注册基本信息，然后异步更新WiFi和公网IP信息
       const basicDeviceInfo = {
         deviceId: this.config.device.id,
-        deviceName: systemHostname || this.config.device.name, // 优先使用系统主机名
+        deviceName: this.config.device.preferConfigName
+          ? this.config.device.name // 优先使用配置的设备名称
+          : systemHostname || this.config.device.name, // 优先使用系统主机名
         // 分组后的字段
         system: {
           platform: process.platform || this.config.device.platform,
@@ -345,15 +346,15 @@ export default class DeviceAgent {
       ])
 
       let timeoutId = null
-      const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('Network info update timeout')), this.constants.networkUpdateTimeout)
+      const timeoutPromise = new Promise((_resolve, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('Network info update timeout')),
+          this.constants.networkUpdateTimeout
+        )
       })
 
       try {
-        const [wifiInfo, publicIp, localIp, macAddresses] = await Promise.race([
-          networkInfoPromise,
-          timeoutPromise
-        ])
+        const [wifiInfo, publicIp, localIp, macAddresses] = await Promise.race([networkInfoPromise, timeoutPromise])
 
         // 清理超时定时器
         if (timeoutId) {
@@ -421,6 +422,12 @@ export default class DeviceAgent {
       if (!baseHostname) {
         console.log('⚠️ 无法获取系统主机名，将使用配置文件中的默认名称')
         return null
+      }
+
+      // 如果配置要求使用真实主机名，则不添加后缀
+      if (this.config.device.useRealHostname) {
+        console.log('🖥️  使用真实主机名（无后缀）:', baseHostname)
+        return baseHostname
       }
 
       return this.generateDeviceName(baseHostname)
@@ -495,7 +502,9 @@ export default class DeviceAgent {
     try {
       const userInfo = os.userInfo()
       if (userInfo.username) {
-        const hostname = `${userInfo.username}的设备`
+        // 优先使用中文设备名，如果用户名看起来是英文名则使用"的设备"
+        const isEnglishName = /^[a-zA-Z\s]+$/.test(userInfo.username)
+        const hostname = isEnglishName ? `${userInfo.username}的MacBook` : `${userInfo.username}的设备`
         console.log('🖥️  使用用户名作为设备名:', hostname)
         return hostname
       }
@@ -529,7 +538,8 @@ export default class DeviceAgent {
    * 获取公网IP地址
    */
   async getPublicIp() {
-    for (const serviceUrl of this.publicIpServices) {
+    // 并行尝试所有IP服务，提高成功率
+    const promises = this.publicIpServices.map(async (serviceUrl) => {
       let timeoutId = null
       try {
         console.log(`🌍 尝试从 ${serviceUrl} 获取公网IP...`)
@@ -560,17 +570,24 @@ export default class DeviceAgent {
           console.log('🌍 获取到公网IP:', ip)
           return ip
         }
+        throw new Error('无效的IP格式')
       } catch (error) {
         if (timeoutId) {
           clearTimeout(timeoutId)
         }
         console.error(`⚠️ 从 ${serviceUrl} 获取公网IP失败:`, error.message)
-        continue
+        throw error
       }
-    }
+    })
 
-    console.log('❌ 所有公网IP服务都无法访问')
-    return null
+    // 等待第一个成功的响应
+    try {
+      const result = await Promise.any(promises)
+      return result
+    } catch {
+      console.log('❌ 所有公网IP服务都无法访问')
+      return null
+    }
   }
 
   /**
@@ -617,7 +634,7 @@ export default class DeviceAgent {
     try {
       // 设置超时：最多等待配置的时间获取WiFi信息
       const wifiPromise = si.wifiConnections()
-      const timeoutPromise = new Promise((_, reject) => {
+      const timeoutPromise = new Promise((_resolve, reject) => {
         setTimeout(() => reject(new Error('WiFi info timeout')), this.constants.wifiTimeout)
       })
 
@@ -846,9 +863,8 @@ export default class DeviceAgent {
     ]
 
     try {
-      for (const dir of dirs) {
-        await fs.ensureDir(dir)
-      }
+      // 并行创建所有目录，提高性能
+      await Promise.all(dirs.map((dir) => fs.ensureDir(dir)))
       console.log('✅ 目录结构初始化完成')
     } catch (error) {
       console.error('❌ 目录创建失败:', error)
@@ -909,6 +925,7 @@ export default class DeviceAgent {
       try {
         this.socket.removeAllListeners()
         this.socket.disconnect()
+        this.socket.close()
       } catch (error) {
         console.error('⚠️ 清理Socket时发生错误:', error.message)
       }
@@ -922,7 +939,38 @@ export default class DeviceAgent {
 
     // 清理处理器
     if (this.socketHandler) {
+      try {
+        if (this.socketHandler.cleanup) {
+          this.socketHandler.cleanup()
+        }
+      } catch (error) {
+        console.error('⚠️ 清理SocketHandler时发生错误:', error.message)
+      }
       this.socketHandler = null
+    }
+
+    // 清理下载管理器
+    if (this.downloadManager) {
+      try {
+        if (this.downloadManager.cleanup) {
+          this.downloadManager.cleanup()
+        }
+      } catch (error) {
+        console.error('⚠️ 清理DownloadManager时发生错误:', error.message)
+      }
+      this.downloadManager = null
+    }
+
+    // 清理部署管理器
+    if (this.deployManager) {
+      try {
+        if (this.deployManager.cleanup) {
+          this.deployManager.cleanup()
+        }
+      } catch (error) {
+        console.error('⚠️ 清理DeployManager时发生错误:', error.message)
+      }
+      this.deployManager = null
     }
 
     // 清理并发控制的Promise引用
@@ -933,13 +981,20 @@ export default class DeviceAgent {
   // 优雅关闭
   async gracefulShutdown() {
     try {
-      console.log('🔄 开始优雅关闭...')
+      console.log('🔄 开始优雅关闭设备代理...')
 
-      // 发送离线状态
-      if (this.isConnected) {
-        this.reportStatus('offline')
-        // 等待状态发送完成
-        await new Promise((resolve) => setTimeout(resolve, this.constants.statusSendDelay))
+      // 发送离线状态（带超时保护）
+      if (this.isConnected && this.socket) {
+        try {
+          this.reportStatus('offline')
+          // 等待状态发送完成，但不超过1秒
+          await Promise.race([
+            new Promise((resolve) => setTimeout(resolve, this.constants.statusSendDelay)),
+            new Promise((resolve) => setTimeout(resolve, 1000))
+          ])
+        } catch (error) {
+          console.error('⚠️ 发送离线状态失败:', error.message)
+        }
       }
 
       // 清理所有资源
@@ -950,6 +1005,7 @@ export default class DeviceAgent {
       console.error('❌ 优雅关闭时发生错误:', error.message)
       // 强制清理
       this.cleanup()
+      throw error
     }
   }
 }

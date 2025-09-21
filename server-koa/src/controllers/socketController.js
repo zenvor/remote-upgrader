@@ -1,6 +1,5 @@
 // 中文注释：ESM 导入
 import deviceManager from '../models/deviceManager.js'
-import deviceConfig from '../models/deviceConfig.js'
 import { DateHelper } from '../utils/common.js'
 
 /**
@@ -13,6 +12,15 @@ export function setupSocketHandlers(io) {
     // 设备注册
     socket.on('device:register', async (data) => {
       try {
+        // 验证注册数据
+        if (!data || typeof data !== 'object') {
+          socket.emit('device:registered', {
+            success: false,
+            error: '无效的注册数据'
+          })
+          return
+        }
+
         // 直接按分组结构注册
         const device = deviceManager.registerDevice(socket, data)
 
@@ -52,8 +60,11 @@ export function setupSocketHandlers(io) {
 
     // 设备心跳（可携带网络与系统信息的轻量更新）
     socket.on('device:heartbeat', (data) => {
+      if (!data || typeof data !== 'object') {
+        return
+      }
       const { deviceId } = data
-      if (deviceId) {
+      if (deviceId && typeof deviceId === 'string') {
         // 可选网络刷新（接受顶层上报）
         const { wifiName, wifiSignal, publicIp, localIp, macAddresses } = data || {}
         if (
@@ -96,6 +107,9 @@ export function setupSocketHandlers(io) {
 
     // 设备状态更新
     socket.on('device:status', (data) => {
+      if (!data || typeof data !== 'object' || !data.deviceId) {
+        return
+      }
       const { deviceId } = data
       console.log(`设备状态更新: ${deviceId}`, data)
 
@@ -106,6 +120,9 @@ export function setupSocketHandlers(io) {
     // 网络信息更新（包含 WiFi、公网/本地 IP、MAC）
     socket.on('device:update-network', (data) => {
       try {
+        if (!data || typeof data !== 'object' || !data.deviceId || !data.network) {
+          return
+        }
         const { deviceId, network } = data
         deviceManager.updateNetworkInfo(deviceId, network)
 
@@ -149,6 +166,9 @@ export function setupSocketHandlers(io) {
     // WiFi信息更新（保留兼容性）
     socket.on('device:update-wifi', (data) => {
       try {
+        if (!data || typeof data !== 'object' || !data.deviceId) {
+          return
+        }
         const device = deviceManager.getDevice(data.deviceId)
         if (device) {
           // 更新设备WiFi信息到分组字段
@@ -164,6 +184,9 @@ export function setupSocketHandlers(io) {
 
     // 包分发相关事件
     socket.on('pkg:status', (data) => {
+      if (!data || typeof data !== 'object' || !data.uploadId) {
+        return
+      }
       console.log('包状态查询:', data)
       // 这里将来处理包分发状态查询
       socket.emit('pkg:status_response', {
@@ -173,17 +196,26 @@ export function setupSocketHandlers(io) {
     })
 
     socket.on('pkg:ack', (data) => {
+      if (!data || typeof data !== 'object') {
+        return
+      }
       console.log('包分片确认:', data)
       // 处理分片确认
     })
 
     socket.on('pkg:verified', (data) => {
+      if (!data || typeof data !== 'object') {
+        return
+      }
       console.log('包校验结果:', data)
       // 处理包校验结果
     })
 
     // 操作结果上报
     socket.on('op:result', (data) => {
+      if (!data || typeof data !== 'object') {
+        return
+      }
       console.log('操作结果:', data)
       // 广播操作结果
       socket.broadcast.emit('operation:result', data)
@@ -197,6 +229,7 @@ export function setupSocketHandlers(io) {
         let deviceId = notification?.data?.deviceId
         const project = notification?.data?.project
         const deployPath = notification?.data?.deployPath
+        const version = notification?.data?.version
         const updatedAt = notification?.data?.updatedAt
 
         if (!deviceId) {
@@ -217,15 +250,16 @@ export function setupSocketHandlers(io) {
         }
 
         // 更新设备配置中的部署路径
-        await deviceManager.updateCurrentDeployPath(deviceId, project, deployPath, updatedAt)
+        await deviceManager.updateCurrentDeployPath(deviceId, project, deployPath, updatedAt, version)
 
-        console.log(`✅ 已更新设备 ${deviceId} 的 ${project} 部署路径: ${deployPath}`)
+        console.log(`✅ 已更新设备 ${deviceId} 的 ${project} 部署路径: ${deployPath}${version ? ` (版本: ${version})` : ''}`)
 
         // 广播部署路径变化事件给其他客户端
         socket.broadcast.emit('device:deploy_path_updated', {
           deviceId,
           project,
           deployPath,
+          version,
           updatedAt,
           timestamp: new Date().toISOString()
         })
@@ -268,8 +302,7 @@ export function setupSocketHandlers(io) {
           await deviceManager.updateCurrentVersion(deviceId, project, {
             version: data.version || null,
             deployPath: normalizedDeployPath,
-            deployDate: now,
-            packageInfo: data.packageInfo || null
+            deployDate: now
           })
 
           await queryDeviceVersions(deviceId)
@@ -296,8 +329,7 @@ export function setupSocketHandlers(io) {
           version: data.version || null,
           timestamp: now,
           message: result?.message || null,
-          versions: versionsUpdate,
-          packageInfo: data.packageInfo || null
+          versions: versionsUpdate
         }
 
         socket.broadcast.emit('operation:result', operationEvent)
@@ -364,9 +396,8 @@ async function queryDeviceVersions(deviceId) {
       const frontendData = frontendResponse.data
       versionUpdates.frontend = {
         version: frontendData.version || null,
-        deployDate: frontendData.deployTime || frontendData.deployDate || new Date().toISOString(),
-        deployPath: frontendData.deployPath || null,
-        packageInfo: frontendData.packageInfo || null
+        deployDate: frontendData.deployTime || frontendData.deployDate || null,
+        deployPath: frontendData.deployPath || null
       }
       console.log(`设备 ${deviceId} 前端版本:`, versionUpdates.frontend)
     }
@@ -376,9 +407,8 @@ async function queryDeviceVersions(deviceId) {
       const backendData = backendResponse.data
       versionUpdates.backend = {
         version: backendData.version || null,
-        deployDate: backendData.deployTime || backendData.deployDate || new Date().toISOString(),
-        deployPath: backendData.deployPath || null,
-        packageInfo: backendData.packageInfo || null
+        deployDate: backendData.deployTime || backendData.deployDate || null,
+        deployPath: backendData.deployPath || null
       }
       console.log(`设备 ${deviceId} 后端版本:`, versionUpdates.backend)
     }
@@ -386,6 +416,7 @@ async function queryDeviceVersions(deviceId) {
     // 更新设备版本信息到存储
     if (Object.keys(versionUpdates).length > 0) {
       for (const [project, versionInfo] of Object.entries(versionUpdates)) {
+        // eslint-disable-next-line no-await-in-loop -- 顺序更新版本信息确保数据一致性
         await deviceManager.updateCurrentVersion(deviceId, project, versionInfo)
       }
 

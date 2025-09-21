@@ -1,7 +1,6 @@
 // 中文注释：ESM 导入
 import deviceManager from '../models/deviceManager.js'
-import deviceConfig from '../models/deviceConfig.js'
-import { getAllDevices as getStoredDevices, getDeviceDeployPaths } from '../models/deviceStorage.js'
+import { getDeviceDeployPaths, getAllDevices as getStoredDevices } from '../models/deviceStorage.js'
 
 /**
  * 获取设备列表（支持筛选和分页）
@@ -24,10 +23,10 @@ async function getDevices(ctx) {
     // 合并实时状态和存储的完整信息
     let devicesWithConfig = storedDevices.map((storedDevice) => {
       // 查找对应的实时设备状态
-      const liveDevice = liveDevices.find((d) => d.deviceId === storedDevice.deviceInfo.deviceId)
+      const liveDevice = liveDevices.find((d) => d.deviceId === storedDevice.deviceId)
 
-      // 提取部署信息，支持新的配置结构
-      const deployInfo = storedDevice.deviceInfo?.deploy || {}
+      // 提取部署信息，支持新旧配置结构
+      const deployInfo = storedDevice.deploy || {}
 
       // 兼容新旧配置结构
       let currentDeployments
@@ -35,26 +34,23 @@ async function getDevices(ctx) {
         // 新配置结构
         currentDeployments = deployInfo.currentDeployments
       } else {
-        // 兼容旧配置结构
-        const currentVersions = deployInfo.currentVersions || {
-          frontend: { version: null, deployDate: null, deployPath: null },
-          backend: { version: null, deployDate: null, deployPath: null }
-        }
+        // 使用新的扁平结构：deploy.frontend 和 deploy.backend
+        const frontend = deployInfo.frontend || { version: null, deployDate: null, deployPath: null }
+        const backend = deployInfo.backend || { version: null, deployDate: null, deployPath: null }
+
         currentDeployments = {
           frontend: {
-            version: currentVersions.frontend?.version || 'unknown',
-            deployDate: currentVersions.frontend?.deployDate || null,
-            deployPath: currentVersions.frontend?.deployPath || null,
-            packageInfo: currentVersions.frontend?.packageInfo || null,
+            version: frontend.version || 'unknown',
+            deployDate: frontend.deployDate || null,
+            deployPath: frontend.deployPath || null,
             status: 'unknown',
             lastOperationType: null,
             lastOperationDate: null
           },
           backend: {
-            version: currentVersions.backend?.version || 'unknown',
-            deployDate: currentVersions.backend?.deployDate || null,
-            deployPath: currentVersions.backend?.deployPath || null,
-            packageInfo: currentVersions.backend?.packageInfo || null,
+            version: backend.version || 'unknown',
+            deployDate: backend.deployDate || null,
+            deployPath: backend.deployPath || null,
             status: 'unknown',
             lastOperationType: null,
             lastOperationDate: null
@@ -62,96 +58,95 @@ async function getDevices(ctx) {
         }
       }
 
-      // 格式化版本信息用于前端显示
-      const versions = {
-        frontend: currentDeployments.frontend?.version || '未部署',
-        backend: currentDeployments.backend?.version || '未部署'
-      }
-
       // 是否存在任一部署路径（由 currentDeployments 派生）
       const hasDeployPath = Boolean(currentDeployments.frontend?.deployPath || currentDeployments.backend?.deployPath)
 
       return {
-        deviceId: storedDevice.deviceInfo.deviceId,
-        deviceName: storedDevice.deviceInfo.deviceName || storedDevice.deviceInfo.deviceId,
-        status: liveDevice?.status || 'offline', // 使用实时状态
+        // 基本信息
+        deviceId: storedDevice.deviceId,
+        deviceName: storedDevice.deviceName || storedDevice.deviceId,
+        status: liveDevice?.status || 'offline',
 
-        // 系统信息
-        system: storedDevice.deviceInfo.system || {},
-        agent: storedDevice.deviceInfo.agent || {},
-        network: storedDevice.deviceInfo.network || {},
-        storage: storedDevice.deviceInfo.storage || {},
-        health: storedDevice.deviceInfo.health || {},
+        // 系统信息（扁平化）
+        platform: storedDevice.system?.platform || null,
+        osVersion: storedDevice.system?.osVersion || null,
+        arch: storedDevice.system?.arch || null,
+        agentVersion: storedDevice.agent?.agentVersion || null,
 
-        // 版本信息（简化显示）
-        versions,
+        // 网络信息（扁平化）
+        wifiName: storedDevice.network?.wifiName || null,
+        wifiSignal: storedDevice.network?.wifiSignal || null,
+        publicIp: storedDevice.network?.publicIp || null,
+        localIp: storedDevice.network?.localIp || null,
+        macAddresses: storedDevice.network?.macAddresses || [],
 
-        // 部署信息（新的配置结构）
-        deploy: {
-          capabilities: deployInfo.capabilities || {
-            rollbackAvailable: deployInfo.rollbackAvailable || false,
-            supportedProjects: ['frontend', 'backend']
-          },
-          currentDeployments,
-          previousDeployments: deployInfo.previousDeployments || {
-            frontend: {
-              version: null,
-              deployPath: null,
-              packageInfo: null,
-              rollbackDate: null
-            },
-            backend: {
-              version: null,
-              deployPath: null,
-              packageInfo: null,
-              rollbackDate: null
-            }
-          },
-          deploymentHistory: deployInfo.deploymentHistory || [],
-          lastDeployStatus: deployInfo.lastDeployStatus || null,
-          lastDeployAt: deployInfo.lastDeployAt || null,
-          lastRollbackAt: deployInfo.lastRollbackAt || null
-        },
-        hasDeployPath,
+        // 版本信息（扁平化）
+        frontendVersion: currentDeployments.frontend?.version || null,
+        backendVersion: currentDeployments.backend?.version || null,
+        frontendDeployPath: currentDeployments.frontend?.deployPath || null,
+        backendDeployPath: currentDeployments.backend?.deployPath || null,
 
-        // 连接信息（使用实时数据）
+        // 存储信息（扁平化）
+        diskFreeBytes: storedDevice.storage?.diskFreeBytes || null,
+        writable: storedDevice.storage?.writable || null,
+
+        // 健康状态（扁平化）
+        uptimeSeconds: storedDevice.health?.uptimeSeconds || null,
+
+        // 连接信息
         connectedAt: liveDevice?.connectedAt || null,
         disconnectedAt: liveDevice?.disconnectedAt || null,
         lastHeartbeat: liveDevice?.lastHeartbeat || null,
 
-        // WiFi信息（简化字段用于表格显示）
-        wifiName: storedDevice.deviceInfo.network?.wifiName,
-        wifiSignal: storedDevice.deviceInfo.network?.wifiSignal,
-        publicIp: storedDevice.deviceInfo.network?.publicIp,
+        // 部署能力标识
+        hasDeployPath,
+        rollbackAvailable: deployInfo.rollbackAvailable || false,
+
+        // 部署详情（用于详情页面显示）
+        deployInfo: {
+          rollbackAvailable: deployInfo.rollbackAvailable || false,
+          lastDeployStatus: deployInfo.lastDeployStatus || null,
+          lastDeployAt: deployInfo.lastDeployAt || null,
+          lastRollbackAt: deployInfo.lastRollbackAt || null,
+          frontend: {
+            version: currentDeployments.frontend?.version || null,
+            deployDate: currentDeployments.frontend?.deployDate || null,
+            deployPath: currentDeployments.frontend?.deployPath || null
+          },
+          backend: {
+            version: currentDeployments.backend?.version || null,
+            deployDate: currentDeployments.backend?.deployDate || null,
+            deployPath: currentDeployments.backend?.deployPath || null
+          }
+        },
 
         // 升级历史
         upgradeHistory: storedDevice.upgradeHistory || []
       }
     })
 
-    // 状态筛选
-    if (status && status !== 'all') {
+    // 状态筛选 - 只有当 status 有值且不为空时才进行筛选
+    if (status && status.trim()) {
       devicesWithConfig = devicesWithConfig.filter((device) => device.status === status)
     }
 
     // 搜索筛选（设备名称、设备ID或WiFi名称）
-    if (search && search.trim()) {
+    if (search && search.trim() && search.trim().length <= 100) {
       const searchTerm = search.trim().toLowerCase()
       devicesWithConfig = devicesWithConfig.filter((device) => {
-        const wifiName = device.network?.wifiName
         return (
           device.deviceName.toLowerCase().includes(searchTerm) ||
           device.deviceId.toLowerCase().includes(searchTerm) ||
-          (wifiName && wifiName.toLowerCase().includes(searchTerm))
+          (device.wifiName && device.wifiName.toLowerCase().includes(searchTerm))
         )
       })
     }
 
     const total = devicesWithConfig.length
 
-    // 分页处理
-    const page = Number.parseInt(pageNumber)
-    const size = Number.parseInt(pageSize)
+    // 分页处理及参数验证
+    const page = Math.max(1, Number.parseInt(pageNumber) || 1)
+    const size = Math.min(100, Math.max(1, Number.parseInt(pageSize) || 20))
     const startIndex = (page - 1) * size
     const endIndex = startIndex + size
     const paginatedDevices = devicesWithConfig.slice(startIndex, endIndex)
@@ -163,18 +158,14 @@ async function getDevices(ctx) {
       pageNum: page,
       pageSize: size,
       totalPages: Math.ceil(total / size),
-      onlineCount: deviceManager.getOnlineDevices().length,
-      filters: {
-        status: status || 'all',
-        search: search || ''
-      }
+      onlineCount: deviceManager.getOnlineDevices().length
     }
   } catch (error) {
     console.error('获取设备列表失败:', error)
     ctx.status = 500
     ctx.body = {
       success: false,
-      error: '获取设备列表失败'
+      error: process.env.NODE_ENV === 'production' ? '获取设备列表失败' : error.message
     }
   }
 }
@@ -243,7 +234,7 @@ async function sendCommand(ctx) {
     ctx.status = 500
     ctx.body = {
       success: false,
-      error: '发送命令失败'
+      error: process.env.NODE_ENV === 'production' ? '发送命令失败' : error.message
     }
   }
 }

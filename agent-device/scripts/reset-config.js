@@ -1,8 +1,6 @@
-#!/usr/bin/env node
-
+import fs from 'fs-extra'
 import path from 'node:path'
 import readline from 'node:readline'
-import fs from 'fs-extra'
 
 const pathsToClean = [
   { label: '设备配置', target: path.resolve('config'), type: 'dir' },
@@ -37,13 +35,15 @@ function ask(question) {
 
   if (!['y', 'yes'].includes(answer)) {
     console.log('已取消重置操作。')
-    process.exit(0)
+    return
   }
 
   let successCount = 0
 
+  // 顺序处理文件清理，避免并发删除冲突
   for (const item of pathsToClean) {
     try {
+      // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
       await fs.remove(item.target)
       successCount++
       console.log(`✅ 已清理 ${item.label}`)

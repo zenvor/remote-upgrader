@@ -1,4 +1,4 @@
-import request from '../request'
+import request from '../request.js'
 
 /**
  * 包管理相关 API
@@ -6,8 +6,8 @@ import request from '../request'
  */
 
 // 获取包列表
-export const getPackageList = (params = {}) => {
-  return request.get('/packages', params)
+export const getPackageList = (parameters = {}) => {
+  return request.get('/packages', parameters)
 }
 
 // 获取包详细信息
@@ -23,4 +23,9 @@ export const downloadPackage = (project, fileName) => {
 // 删除包
 export const deletePackage = (project, fileName) => {
   return request.delete(`/packages/${project}/${fileName}`)
+}
+
+/** 获取包列表（升级选择专用） */
+export const getPackageListForUpgrade = (parameters = {}) => {
+  return request.get('/packages/list', parameters)
 }

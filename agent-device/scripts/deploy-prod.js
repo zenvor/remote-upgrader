@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * 跨平台生产环境部署脚本
  * 解决 Windows 和 Unix 系统的命令差异问题
@@ -61,7 +59,7 @@ async function deployProd() {
     log('📝 查看日志: npm run logs', 'blue')
   } catch (error) {
     log(`❌ 部署失败: ${error.message}`, 'red')
-    process.exit(1)
+    throw error
   }
 }
 

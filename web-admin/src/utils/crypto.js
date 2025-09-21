@@ -26,7 +26,7 @@ export async function calculateFileMD5(file, onProgress = null) {
       fileReader.readAsArrayBuffer(file.slice(start, end))
     }
 
-    fileReader.onload = function (event) {
+    fileReader.addEventListener('load', function (event) {
       try {
         const arrayBuffer = event.target.result
         const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer)
@@ -51,7 +51,7 @@ export async function calculateFileMD5(file, onProgress = null) {
       } catch (error) {
         reject(error)
       }
-    }
+    })
 
     fileReader.onerror = function (error) {
       reject(error)
@@ -71,7 +71,7 @@ export async function calculateBlobMD5(blob) {
   return new Promise((resolve, reject) => {
     const fileReader = new FileReader()
 
-    fileReader.onload = function (event) {
+    fileReader.addEventListener('load', function (event) {
       try {
         const arrayBuffer = event.target.result
         const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer)
@@ -80,7 +80,7 @@ export async function calculateBlobMD5(blob) {
       } catch (error) {
         reject(error)
       }
-    }
+    })
 
     fileReader.onerror = function (error) {
       reject(error)
@@ -140,12 +140,12 @@ export async function calculateFileMD5WithWorker(file, onProgress = null) {
 
     // 读取整个文件到内存（对于大文件可能需要优化）
     const reader = new FileReader()
-    reader.onload = function (event) {
+    reader.addEventListener('load', function (event) {
       worker.postMessage({
         fileBuffer: event.target.result,
         chunkSize: 2 * 1024 * 1024 // 2MB
       })
-    }
+    })
 
     worker.onmessage = function (event) {
       const { type, progress, hash, error } = event.data

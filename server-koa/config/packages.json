@@ -4,25 +4,8 @@
       "packages": {}
     },
     "backend": {
-      "packages": {
-        "school-v1.0.1 15.53.40.zip": {
-          "fileName": "school-v1.0.1 15.53.40.zip",
-          "fileSize": 61977337,
-          "fileMD5": "b8fadb783fd6ee6947b955d86ba708f8",
-          "version": "v1.0.1",
-          "uploadedAt": "2025-09-19T15:44:15.515Z",
-          "uploadedBy": "system"
-        }
-      }
+      "packages": {}
     }
   },
-  "lastSyncedAt": null,
-  "statistics": {
-    "totalPackages": 1,
-    "frontendPackages": 0,
-    "backendPackages": 1,
-    "totalSize": "59.11MB",
-    "lastUpdated": "2025-09-20"
-  },
-  "lastUpdated": "2025-09-20"
+  "lastSyncedAt": null
 }

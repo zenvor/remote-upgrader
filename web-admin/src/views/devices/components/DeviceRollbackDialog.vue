@@ -3,13 +3,13 @@
     v-model:open="open"
     :title="dialogTitle"
     :width="700"
-    :maskClosable="false"
-    @cancel="cancel"
+    :mask-closable="false"
     destroy-on-close
     ok-text="开始回滚"
     cancel-text="取消"
-    @ok="handleSubmit"
     :confirm-loading="rolling"
+    @cancel="cancel"
+    @ok="handleSubmit"
   >
     <div v-if="targetDevices.length > 0">
       <!-- 目标设备 -->
@@ -79,7 +79,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { useDevices } from '@/composables/useDevices'
+import { deviceApi } from '@/api'
 import toast from '@/utils/toast'
 import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
 
@@ -102,8 +102,33 @@ const formData = ref({
   project: 'frontend'
 })
 
-// 回滚 API（由对话框内部直接提交）
-const { rollbackDevice, batchRollback } = useDevices()
+// 回滚设备
+const rollbackDevice = async (device, project) => {
+  try {
+    const response = await deviceApi.rollbackDevice(device.deviceId, project)
+
+    if (response.success) {
+      toast.success(`设备 "${device.deviceName}" 回滚命令已发送`, '回滚启动')
+    }
+  } catch (error) {
+    console.error('回滚设备失败:', error)
+    toast.error(`设备回滚失败: ${error.message}`, '回滚失败')
+    throw error
+  }
+}
+
+// 批量回滚
+const batchRollback = async (deviceList, project) => {
+  const promises = deviceList.map((device) => rollbackDevice(device, project))
+
+  try {
+    await Promise.all(promises)
+    console.log(`批量回滚完成，共 ${deviceList.length} 个设备`)
+  } catch (error) {
+    console.error('批量回滚失败:', error)
+    throw error
+  }
+}
 
 // 本地状态
 const rolling = ref(false)

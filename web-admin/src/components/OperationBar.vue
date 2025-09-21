@@ -19,7 +19,7 @@
         <a-space :size="6">
           <slot name="actions"></slot>
           <a-tooltip v-if="showRefresh" title="刷新">
-            <a-button type="text" @click="onRefresh" class="refresh-btn"><ReloadOutlined /></a-button>
+            <a-button type="text" class="refresh-btn" @click="onRefresh"><ReloadOutlined /></a-button>
           </a-tooltip>
         </a-space>
       </div>
@@ -30,7 +30,7 @@
 <script setup>
 import { ReloadOutlined } from '@ant-design/icons-vue'
 
-const props = defineProps({
+defineProps({
   title: { type: String, default: '' },
   selectedCount: { type: Number, default: 0 },
   total: { type: Number, default: undefined },

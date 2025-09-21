@@ -28,9 +28,7 @@ function createDefaultConfig() {
     devices: {},
     settings: {
       heartbeatTimeout: Number.parseInt(process.env.HEARTBEAT_TIMEOUT) || 60_000, // 心跳超时
-      maxConnectionHistory: Number.parseInt(process.env.MAX_CONNECTION_HISTORY) || 20, // 保存连接历史数
       maxUpgradeHistory: Number.parseInt(process.env.MAX_UPGRADE_HISTORY) || 10, // 保存升级历史数
-      autoCleanupOfflineDevices: process.env.AUTO_CLEANUP_OFFLINE_DEVICES === 'true', // 自动清理离线设备
       offlineCleanupDays: Number.parseInt(process.env.OFFLINE_CLEANUP_DAYS) || 7 // 清理离线设备天数
     },
     statistics: {
@@ -111,73 +109,66 @@ export async function saveDevicesConfig(config) {
 export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
   try {
     const config = await getDevicesConfig()
-    const now = DateHelper.getCurrentDate()
 
     if (config.devices[deviceId]) {
       // 更新现有设备
       const device = config.devices[deviceId]
 
-      // 更新设备基本信息
-      device.deviceInfo = {
-        ...device.deviceInfo,
-        ...deviceInfo
-      }
+      // 更新设备基本信息（支持新的扁平结构）
+      Object.assign(device, deviceInfo)
 
-      // 更新网络信息到分组字段（统一使用 deviceInfo.network）
-      device.deviceInfo.network = {
-        wifiName: device.deviceInfo.network?.wifiName ?? null,
-        wifiSignal: device.deviceInfo.network?.wifiSignal ?? null,
-        publicIp: device.deviceInfo.network?.publicIp ?? null,
-        localIp: device.deviceInfo.network?.localIp ?? null,
-        macAddresses: Array.isArray(device.deviceInfo.network?.macAddresses)
-          ? device.deviceInfo.network.macAddresses
+      // 更新网络信息（统一使用扁平结构）
+      device.network = {
+        wifiName: device.network?.wifiName ?? null,
+        wifiSignal: device.network?.wifiSignal ?? null,
+        publicIp: device.network?.publicIp ?? null,
+        localIp: device.network?.localIp ?? null,
+        macAddresses: Array.isArray(device.network?.macAddresses)
+          ? device.network.macAddresses
           : [],
         ...network
       }
     } else {
       // 新设备
       config.devices[deviceId] = {
-        deviceInfo: {
-          deviceId,
-          deviceName: deviceInfo?.deviceName || deviceId,
-          system: {
-            platform: deviceInfo?.system?.platform || deviceInfo?.platform || 'unknown',
-            osVersion: deviceInfo?.system?.osVersion ?? deviceInfo?.osVersion ?? null,
-            arch: deviceInfo?.system?.arch ?? deviceInfo?.arch ?? null
-          },
-          agent: {
-            agentVersion: deviceInfo?.agent?.agentVersion ?? deviceInfo?.agentVersion ?? null
-          },
-          network: {
-            wifiName: network?.wifiName ?? deviceInfo?.network?.wifiName ?? null,
-            wifiSignal: network?.wifiSignal ?? deviceInfo?.network?.wifiSignal ?? null,
-            publicIp: network?.publicIp ?? deviceInfo?.network?.publicIp ?? null,
-            localIp: network?.localIp ?? deviceInfo?.network?.localIp ?? null,
-            macAddresses: Array.isArray(network?.macAddresses)
-              ? network.macAddresses
-              : deviceInfo?.network?.macAddresses || []
-          },
-          storage: {
-            diskFreeBytes: deviceInfo?.storage?.diskFreeBytes ?? deviceInfo?.diskFreeBytes ?? null,
-            writable:
-              typeof (deviceInfo?.storage?.writable ?? deviceInfo?.writable) === 'boolean'
-                ? (deviceInfo?.storage?.writable ?? deviceInfo?.writable)
-                : null
-          },
-          deploy: {
-            rollbackAvailable:
-              typeof (deviceInfo?.deploy?.rollbackAvailable ?? deviceInfo?.rollbackAvailable) === 'boolean'
-                ? (deviceInfo?.deploy?.rollbackAvailable ?? deviceInfo?.rollbackAvailable)
-                : null
-          },
-          health: {
-            uptimeSeconds: deviceInfo?.health?.uptimeSeconds ?? deviceInfo?.uptimeSeconds ?? null
-          }
+        deviceId,
+        deviceName: deviceInfo?.deviceName || deviceId,
+        system: {
+          platform: deviceInfo?.system?.platform || deviceInfo?.platform || 'unknown',
+          osVersion: deviceInfo?.system?.osVersion ?? deviceInfo?.osVersion ?? null,
+          arch: deviceInfo?.system?.arch ?? deviceInfo?.arch ?? null
+        },
+        agent: {
+          agentVersion: deviceInfo?.agent?.agentVersion ?? deviceInfo?.agentVersion ?? null
+        },
+        network: {
+          wifiName: network?.wifiName ?? deviceInfo?.network?.wifiName ?? null,
+          wifiSignal: network?.wifiSignal ?? deviceInfo?.network?.wifiSignal ?? null,
+          publicIp: network?.publicIp ?? deviceInfo?.network?.publicIp ?? null,
+          localIp: network?.localIp ?? deviceInfo?.network?.localIp ?? null,
+          macAddresses: Array.isArray(network?.macAddresses)
+            ? network.macAddresses
+            : deviceInfo?.network?.macAddresses || []
+        },
+        storage: {
+          diskFreeBytes: deviceInfo?.storage?.diskFreeBytes ?? deviceInfo?.diskFreeBytes ?? null,
+          writable:
+            typeof (deviceInfo?.storage?.writable ?? deviceInfo?.writable) === 'boolean'
+              ? (deviceInfo?.storage?.writable ?? deviceInfo?.writable)
+              : null
+        },
+        deploy: {
+          rollbackAvailable:
+            typeof (deviceInfo?.deploy?.rollbackAvailable ?? deviceInfo?.rollbackAvailable) === 'boolean'
+              ? (deviceInfo?.deploy?.rollbackAvailable ?? deviceInfo?.rollbackAvailable)
+              : null
+        },
+        health: {
+          uptimeSeconds: deviceInfo?.health?.uptimeSeconds ?? deviceInfo?.uptimeSeconds ?? null
         },
         upgradeHistory: [],
         status: {
           current: 'offline',
-          lastOnline: null,
           lastHeartbeat: null
         }
       }
@@ -211,7 +202,6 @@ export async function updateDeviceConnectionStatus(deviceId, isOnline = true) {
     // 更新状态
     device.status.current = isOnline ? 'online' : 'offline'
     if (isOnline) {
-      device.status.lastOnline = now
       device.status.lastHeartbeat = now
     }
 
@@ -247,7 +237,7 @@ export async function recordDeviceDisconnection(deviceId) {
 
     // 更新状态
     device.status.current = 'offline'
-    device.status.lastOnline = now
+    device.status.lastHeartbeat = now
 
     // 更新统计
     if (wasOnline && config.statistics.onlineDevices > 0) {
@@ -277,14 +267,14 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
     device.status.lastHeartbeat = now
 
     // 确保分组字段结构存在（但不覆盖已有数据）
-    device.deviceInfo.system = device.deviceInfo.system || {}
-    device.deviceInfo.agent = device.deviceInfo.agent || {}
-    device.deviceInfo.storage = device.deviceInfo.storage || {}
-    device.deviceInfo.deploy = device.deviceInfo.deploy || {}
-    device.deviceInfo.health = device.deviceInfo.health || {}
+    device.system = device.system || {}
+    device.agent = device.agent || {}
+    device.storage = device.storage || {}
+    device.deploy = device.deploy || {}
+    device.health = device.health || {}
 
     // 更新网络信息（如果提供）
-    device.deviceInfo.network = device.deviceInfo.network || {
+    device.network = device.network || {
       wifiName: null,
       wifiSignal: null,
       publicIp: null,
@@ -292,25 +282,25 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
       macAddresses: []
     }
     if (network.wifiName !== undefined) {
-      device.deviceInfo.network.wifiName = network.wifiName
+      device.network.wifiName = network.wifiName
     }
 
     if (network.wifiSignal !== undefined) {
-      device.deviceInfo.network.wifiSignal = network.wifiSignal
+      device.network.wifiSignal = network.wifiSignal
     }
 
     if (network.publicIp !== undefined) {
-      device.deviceInfo.network.publicIp = network.publicIp
+      device.network.publicIp = network.publicIp
       // 同步最后一次已知公网 IP
-      device.deviceInfo.network.lastKnownIp = network.publicIp
+      device.network.lastKnownIp = network.publicIp
     }
 
     if (network.localIp !== undefined) {
-      device.deviceInfo.network.localIp = network.localIp
+      device.network.localIp = network.localIp
     }
 
     if (Array.isArray(network.macAddresses)) {
-      device.deviceInfo.network.macAddresses = network.macAddresses
+      device.network.macAddresses = network.macAddresses
     }
 
     return await saveDevicesConfig(config)
@@ -326,7 +316,6 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
 export async function updateDeviceSystemInfo(deviceId, systemInfo = {}) {
   try {
     const config = await getDevicesConfig()
-    const now = DateHelper.getCurrentDate()
 
     if (!config.devices[deviceId]) {
       return config // 设备不存在，直接返回
@@ -335,31 +324,31 @@ export async function updateDeviceSystemInfo(deviceId, systemInfo = {}) {
     const device = config.devices[deviceId]
 
     // 确保分组字段结构存在
-    device.deviceInfo.system = device.deviceInfo.system || {}
-    device.deviceInfo.agent = device.deviceInfo.agent || {}
-    device.deviceInfo.storage = device.deviceInfo.storage || {}
-    device.deviceInfo.deploy = device.deviceInfo.deploy || {}
-    device.deviceInfo.health = device.deviceInfo.health || {}
+    device.system = device.system || {}
+    device.agent = device.agent || {}
+    device.storage = device.storage || {}
+    device.deploy = device.deploy || {}
+    device.health = device.health || {}
 
     // 更新系统信息（只更新提供的字段）
     if (systemInfo.system) {
-      Object.assign(device.deviceInfo.system, systemInfo.system)
+      Object.assign(device.system, systemInfo.system)
     }
 
     if (systemInfo.agent) {
-      Object.assign(device.deviceInfo.agent, systemInfo.agent)
+      Object.assign(device.agent, systemInfo.agent)
     }
 
     if (systemInfo.storage) {
-      Object.assign(device.deviceInfo.storage, systemInfo.storage)
+      Object.assign(device.storage, systemInfo.storage)
     }
 
     if (systemInfo.deploy) {
-      Object.assign(device.deviceInfo.deploy, systemInfo.deploy)
+      Object.assign(device.deploy, systemInfo.deploy)
     }
 
     if (systemInfo.health) {
-      Object.assign(device.deviceInfo.health, systemInfo.health)
+      Object.assign(device.health, systemInfo.health)
     }
 
     return await saveDevicesConfig(config)
@@ -430,51 +419,42 @@ export async function updateDeviceCurrentVersion(deviceId, project, versionInfo)
     const device = config.devices[deviceId]
 
     // 确保 deploy 字段存在
-    if (!device.deviceInfo.deploy) {
-      device.deviceInfo.deploy = { rollbackAvailable: false }
+    if (!device.deploy) {
+      device.deploy = { rollbackAvailable: false }
     }
 
-    // 确保 currentVersions 字段存在
-    if (!device.deviceInfo.deploy.currentVersions) {
-      device.deviceInfo.deploy.currentVersions = {
-        frontend: {
-          version: null,
-          deployDate: null,
-          deployPath: null,
-          packageInfo: null
-        },
-        backend: {
-          version: null,
-          deployDate: null,
-          deployPath: null,
-          packageInfo: null
-        }
+    const deployObj = device.deploy
+
+    // 确保 frontend 和 backend 字段存在
+    if (!deployObj.frontend) {
+      deployObj.frontend = {
+        version: null,
+        deployDate: null,
+        deployPath: null
       }
     }
 
-    if (!device.deviceInfo.deploy.currentDeployPaths) {
-      device.deviceInfo.deploy.currentDeployPaths = {
-        frontend: null,
-        backend: null
+    if (!deployObj.backend) {
+      deployObj.backend = {
+        version: null,
+        deployDate: null,
+        deployPath: null
       }
     }
+
 
     // 更新指定项目的版本信息
     if (project && ['frontend', 'backend'].includes(project)) {
-      const existingRecord = device.deviceInfo.deploy.currentVersions[project] || {}
+      const existingRecord = deployObj[project] || {}
       const deployPath =
         typeof versionInfo.deployPath === 'string' ? versionInfo.deployPath.trim() : versionInfo.deployPath || null
 
-      device.deviceInfo.deploy.currentVersions[project] = {
+      deployObj[project] = {
         version: versionInfo.version || existingRecord.version || null,
         deployDate: versionInfo.deployDate || versionInfo.deployTime || existingRecord.deployDate || now,
-        deployPath: deployPath || existingRecord.deployPath || null,
-        packageInfo: versionInfo.packageInfo || existingRecord.packageInfo || null
+        deployPath: deployPath || existingRecord.deployPath || null
       }
 
-      if (deployPath) {
-        device.deviceInfo.deploy.currentDeployPaths[project] = deployPath
-      }
     }
 
     return await saveDevicesConfig(config)
@@ -490,37 +470,33 @@ export async function updateDeviceCurrentVersion(deviceId, project, versionInfo)
 export async function updateDeviceDeployMetadata(deviceId, project, metadata = {}) {
   try {
     const config = await getDevicesConfig()
-    const now = DateHelper.getCurrentDate()
 
     if (!config.devices[deviceId]) {
       throw new Error(`设备不存在: ${deviceId}`)
     }
 
     const device = config.devices[deviceId]
-    device.deviceInfo.deploy = device.deviceInfo.deploy || {}
-    device.deviceInfo.deploy.currentDeployPaths = device.deviceInfo.deploy.currentDeployPaths || {
-      frontend: null,
-      backend: null
-    }
+    device.deploy = device.deploy || {}
 
     if (project && ['frontend', 'backend'].includes(project)) {
       const deployPath = typeof metadata.deployPath === 'string' ? metadata.deployPath.trim() : metadata.deployPath
 
       if (deployPath) {
-        device.deviceInfo.deploy.currentDeployPaths[project] = deployPath
+        device.deploy[project] = device.deploy[project] || {}
+        device.deploy[project].deployPath = deployPath
       }
     }
 
     if (metadata.status) {
-      device.deviceInfo.deploy.lastDeployStatus = metadata.status
+      device.deploy.lastDeployStatus = metadata.status
     }
 
     if (metadata.deployAt) {
-      device.deviceInfo.deploy.lastDeployAt = metadata.deployAt
+      device.deploy.lastDeployAt = metadata.deployAt
     }
 
     if (metadata.rollbackAt) {
-      device.deviceInfo.deploy.lastRollbackAt = metadata.rollbackAt
+      device.deploy.lastRollbackAt = metadata.rollbackAt
     }
 
     return await saveDevicesConfig(config)
@@ -536,12 +512,15 @@ export async function updateDeviceDeployMetadata(deviceId, project, metadata = {
 export async function getDeviceDeployPaths(deviceId) {
   try {
     const config = await getDevicesConfig()
-    return (
-      config.devices[deviceId]?.deviceInfo?.deploy?.currentDeployPaths || {
-        frontend: null,
-        backend: null
-      }
-    )
+    const device = config.devices[deviceId]
+    if (!device) {
+      return { frontend: null, backend: null }
+    }
+
+    return {
+      frontend: device.deploy?.frontend?.deployPath || null,
+      backend: device.deploy?.backend?.deployPath || null
+    }
   } catch (error) {
     console.error('获取设备部署路径失败:', error)
     throw error
@@ -587,8 +566,8 @@ export async function cleanupOfflineDevices() {
     for (const [deviceId, device] of Object.entries(config.devices)) {
       if (
         device.status.current === 'offline' &&
-        device.status.lastOnline &&
-        new Date(device.status.lastOnline) < daysAgo
+        device.status.lastHeartbeat &&
+        new Date(device.status.lastHeartbeat) < daysAgo
       ) {
         delete config.devices[deviceId]
         cleanedCount++

@@ -153,6 +153,7 @@ export const RetryHelper = {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        // eslint-disable-next-line no-await-in-loop -- 重试逻辑需要顺序执行
         return await operation()
       } catch (error) {
         lastError = error
@@ -166,6 +167,7 @@ export const RetryHelper = {
 
         // 等待后重试
         if (delay > 0) {
+          // eslint-disable-next-line no-await-in-loop -- 重试逻辑需要顺序执行
           await new Promise((resolve) => setTimeout(resolve, delay))
         }
       }

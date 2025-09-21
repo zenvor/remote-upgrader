@@ -3,23 +3,25 @@
  */
 // 中文注释：设备管理（ESM 默认导出实例）
 import {
+  cleanupOfflineDevices,
+  getAllDevices as getStoredDevices,
+  recordDeviceDisconnection,
+  recordDeviceUpgrade,
   saveDeviceInfo,
   updateDeviceConnectionStatus,
-  recordDeviceDisconnection,
-  updateDeviceHeartbeat,
-  updateDeviceSystemInfo,
-  recordDeviceUpgrade,
   updateDeviceCurrentVersion,
   updateDeviceDeployMetadata,
-  getAllDevices as getStoredDevices,
-  cleanupOfflineDevices
+  updateDeviceHeartbeat,
+  updateDeviceSystemInfo
 } from './deviceStorage.js'
 
 class DeviceManager {
   constructor() {
     this.devices = new Map() // DeviceId -> { socket, info, status }
     this.socketToDevice = new Map() // SocketId -> deviceId
-    this.maxDevices = Number.parseInt(process.env.MAX_DEVICES) || 1000 // 设备容量限制
+    // 验证和限制最大设备数量
+    const maxDevices = Number.parseInt(process.env.MAX_DEVICES) || 1000
+    this.maxDevices = Math.min(Math.max(maxDevices, 1), 10000) // 限制在1-10000之间
     this.initializeFromStorage()
   }
 
@@ -31,15 +33,15 @@ class DeviceManager {
       const storedDevices = await getStoredDevices()
       for (const deviceData of storedDevices) {
         // 恢复设备信息但不恢复连接状态（因为服务器重启后连接都断开了）
-        const infoFromStorage = { ...deviceData.deviceInfo }
-        this.devices.set(deviceData.deviceInfo.deviceId, {
-          deviceId: deviceData.deviceInfo.deviceId,
+        const infoFromStorage = { ...deviceData }
+        this.devices.set(deviceData.deviceId, {
+          deviceId: deviceData.deviceId,
           socket: null, // 重启后没有活跃连接
           info: infoFromStorage,
           status: 'offline', // 重启后所有设备都是离线状态
           connectedAt: null,
           lastHeartbeat: null,
-          disconnectedAt: deviceData.status.lastOnline
+          disconnectedAt: deviceData.status.lastHeartbeat
         })
       }
 
@@ -53,6 +55,11 @@ class DeviceManager {
    * 注册设备
    */
   registerDevice(socket, deviceInfo) {
+    // 验证输入数据
+    if (!deviceInfo || typeof deviceInfo !== 'object') {
+      throw new Error('无效的设备信息')
+    }
+
     const {
       deviceId,
       deviceName,
@@ -70,8 +77,13 @@ class DeviceManager {
       health = {}
     } = deviceInfo
 
-    if (!deviceId) {
-      throw new Error('设备ID不能为空')
+    if (!deviceId || typeof deviceId !== 'string' || deviceId.trim().length === 0) {
+      throw new Error('设备ID必须是非空字符串')
+    }
+
+    // 限制设备ID长度
+    if (deviceId.length > 100) {
+      throw new Error('设备ID长度不能超过100个字符')
     }
 
     // 保存已存在设备的详细信息，以便在重连时合并
@@ -123,7 +135,7 @@ class DeviceManager {
         },
         // 保留其他有效的设备信息字段（排除状态和时间戳等非设备信息字段）
         ...(function (info) {
-          const { status, timestamp, ...validFields } = info
+          const { ...validFields } = info
           return validFields
         })(deviceInfo)
       },
@@ -370,10 +382,20 @@ class DeviceManager {
    * 向设备发送消息
    */
   sendToDevice(deviceId, event, data) {
+    // 验证参数
+    if (!deviceId || typeof deviceId !== 'string' || !event || typeof event !== 'string') {
+      return false
+    }
+
     const device = this.devices.get(deviceId)
     if (device && device.socket && device.status === 'online') {
-      device.socket.emit(event, data)
-      return true
+      try {
+        device.socket.emit(event, data)
+        return true
+      } catch (error) {
+        console.error(`向设备发送消息失败 [${deviceId}]:`, error.message)
+        return false
+      }
     }
 
     return false
@@ -403,6 +425,17 @@ class DeviceManager {
    * 发送命令并等待响应
    */
   async sendCommand(deviceId, command, parameters = {}, timeout = 30_000) {
+    // 验证参数
+    if (!deviceId || typeof deviceId !== 'string' || !command || typeof command !== 'string') {
+      return {
+        success: false,
+        error: '无效的设备ID或命令'
+      }
+    }
+
+    // 验证超时时间
+    const validTimeout = Math.min(Math.max(Number(timeout) || 30_000, 1000), 300_000) // 1秒到5分钟之间
+
     const device = this.devices.get(deviceId)
     if (!device || !device.socket || device.status !== 'online') {
       return {
@@ -420,7 +453,7 @@ class DeviceManager {
           success: false,
           error: '命令执行超时'
         })
-      }, timeout)
+      }, validTimeout)
 
       const responseHandler = (response) => {
         clearTimeout(timeoutId)
@@ -479,7 +512,12 @@ class DeviceManager {
    * 清理离线设备（超过1小时未心跳）
    */
   async cleanupOfflineDevices() {
-    const oneHourAgo = new Date(Date.now() - (Number.parseInt(process.env.HEARTBEAT_TIMEOUT) || 60_000) * 60)
+    // 验证和限制心跳超时时间
+    const heartbeatTimeout = Math.min(
+      Math.max(Number.parseInt(process.env.HEARTBEAT_TIMEOUT) || 60_000, 30_000),
+      3_600_000
+    ) // 30秒到1小时之间
+    const oneHourAgo = new Date(Date.now() - heartbeatTimeout * 60)
     let cleanedCount = 0
 
     for (const [deviceId, device] of this.devices) {
@@ -522,40 +560,26 @@ class DeviceManager {
       const device = this.devices.get(deviceId)
       if (device) {
         device.info.deploy = device.info.deploy || {}
-        device.info.deploy.currentVersions = device.info.deploy.currentVersions || {
-          frontend: {
-            version: null,
-            deployDate: null,
-            deployPath: null,
-            packageInfo: null
-          },
-          backend: {
-            version: null,
-            deployDate: null,
-            deployPath: null,
-            packageInfo: null
-          }
+        // 确保 frontend 和 backend 字段存在
+        device.info.deploy.frontend = device.info.deploy.frontend || {
+          version: null,
+          deployDate: null,
+          deployPath: null
         }
+        device.info.deploy.backend = device.info.deploy.backend || {
+          version: null,
+          deployDate: null,
+          deployPath: null
+        }
+
         if (project && ['frontend', 'backend'].includes(project)) {
           const deployPath =
             typeof versionInfo.deployPath === 'string' ? versionInfo.deployPath.trim() : versionInfo.deployPath || null
-          device.info.deploy.currentVersions[project] = {
-            version: versionInfo.version || device.info.deploy.currentVersions[project]?.version || null,
+          device.info.deploy[project] = {
+            version: versionInfo.version || device.info.deploy[project]?.version || null,
             deployDate:
-              versionInfo.deployDate ||
-              versionInfo.deployTime ||
-              device.info.deploy.currentVersions[project]?.deployDate ||
-              null,
-            deployPath: deployPath || device.info.deploy.currentVersions[project]?.deployPath || null,
-            packageInfo: versionInfo.packageInfo || device.info.deploy.currentVersions[project]?.packageInfo || null
-          }
-
-          if (deployPath) {
-            device.info.deploy.currentDeployPaths = device.info.deploy.currentDeployPaths || {
-              frontend: null,
-              backend: null
-            }
-            device.info.deploy.currentDeployPaths[project] = deployPath
+              versionInfo.deployDate || versionInfo.deployTime || device.info.deploy[project]?.deployDate || null,
+            deployPath: deployPath || device.info.deploy[project]?.deployPath || null
           }
         }
       }
@@ -577,14 +601,6 @@ class DeviceManager {
       const device = this.devices.get(deviceId)
       if (device) {
         device.info.deploy = device.info.deploy || {}
-        device.info.deploy.currentDeployPaths = device.info.deploy.currentDeployPaths || {
-          frontend: null,
-          backend: null
-        }
-
-        if (project && ['frontend', 'backend'].includes(project) && normalizedMetadata.deployPath) {
-          device.info.deploy.currentDeployPaths[project] = normalizedMetadata.deployPath
-        }
 
         if (normalizedMetadata.status) {
           device.info.deploy.lastDeployStatus = normalizedMetadata.status
@@ -606,7 +622,7 @@ class DeviceManager {
   /**
    * 更新设备当前部署路径（从 agent 通知）
    */
-  async updateCurrentDeployPath(deviceId, project, deployPath, updatedAt) {
+  async updateCurrentDeployPath(deviceId, project, deployPath, updatedAt, version = null) {
     try {
       const device = this.devices.get(deviceId)
       if (!device) {
@@ -616,42 +632,30 @@ class DeviceManager {
 
       const normalizedPath = typeof deployPath === 'string' ? deployPath.trim() : deployPath
 
-      // 更新内存中的当前部署路径
+      // 更新内存中的部署路径
       device.info.deploy = device.info.deploy || {}
-      device.info.deploy.currentDeployPaths = device.info.deploy.currentDeployPaths || {
-        frontend: null,
-        backend: null
-      }
 
       if (project && ['frontend', 'backend'].includes(project)) {
-        device.info.deploy.currentDeployPaths[project] = normalizedPath
-
-        // 同时更新 currentVersions 中的 deployPath
-        device.info.deploy.currentVersions = device.info.deploy.currentVersions || {
-          frontend: {
-            version: null,
-            deployDate: null,
-            deployPath: null,
-            packageInfo: null
-          },
-          backend: {
-            version: null,
-            deployDate: null,
-            deployPath: null,
-            packageInfo: null
-          }
+        // 更新对应项目的 deployPath
+        device.info.deploy[project] = device.info.deploy[project] || {
+          version: null,
+          deployDate: null,
+          deployPath: null
         }
-        device.info.deploy.currentVersions[project].deployPath = normalizedPath
+        device.info.deploy[project].deployPath = normalizedPath
+        // 如果提供了版本信息，同时更新版本
+        if (version) {
+          device.info.deploy[project].version = version
+        }
 
         // 持久化到存储
         await this.updateCurrentVersion(deviceId, project, {
           deployPath: normalizedPath,
-          deployDate: device.info.deploy.currentVersions[project].deployDate || updatedAt || new Date().toISOString(),
-          version: device.info.deploy.currentVersions[project].version || 'unknown',
-          packageInfo: device.info.deploy.currentVersions[project].packageInfo
+          deployDate: device.info.deploy[project].deployDate || updatedAt || new Date().toISOString(),
+          version: version || device.info.deploy[project].version || 'unknown'
         })
 
-        console.log(`更新设备当前部署路径: ${deviceId} ${project} -> ${normalizedPath}`)
+        console.log(`更新设备当前部署路径: ${deviceId} ${project} -> ${normalizedPath}${version ? ` (版本: ${version})` : ''}`)
       }
     } catch (error) {
       console.error('更新设备当前部署路径失败:', error)
@@ -676,7 +680,6 @@ class DeviceManager {
           version: 'unknown',
           deployDate: null,
           deployPath: null,
-          packageInfo: null,
           status: 'unknown',
           lastOperationType: null,
           lastOperationDate: null
@@ -685,7 +688,6 @@ class DeviceManager {
           version: 'unknown',
           deployDate: null,
           deployPath: null,
-          packageInfo: null,
           status: 'unknown',
           lastOperationType: null,
           lastOperationDate: null
@@ -705,8 +707,7 @@ class DeviceManager {
         await this.updateCurrentVersion(deviceId, project, {
           deployPath: normalizedPath,
           deployDate: device.info.deploy.currentDeployments[project].deployDate || updateTime,
-          version: device.info.deploy.currentDeployments[project].version || 'unknown',
-          packageInfo: device.info.deploy.currentDeployments[project].packageInfo
+          version: device.info.deploy.currentDeployments[project].version || 'unknown'
         })
 
         console.log(`更新设备部署路径: ${deviceId} ${project} -> ${normalizedPath}`)

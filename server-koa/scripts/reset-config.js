@@ -1,8 +1,6 @@
-#!/usr/bin/env node
-
+import fs from 'fs-extra'
 import path from 'node:path'
 import readline from 'node:readline'
-import fs from 'fs-extra'
 
 const rootDir = process.cwd()
 
@@ -19,9 +17,7 @@ const filesToReset = [
       devices: {},
       settings: {
         heartbeatTimeout: 60_000,
-        maxConnectionHistory: 20,
         maxUpgradeHistory: 10,
-        autoCleanupOfflineDevices: false,
         offlineCleanupDays: 7
       },
       statistics: {
@@ -68,11 +64,13 @@ const ask = (q) => new Promise((resolve) => rl.question(q, (ans) => resolve(ans.
 
   if (!['y', 'yes'].includes(answer)) {
     console.log('已取消重置操作。')
-    process.exit(0)
+    return
   }
 
+  // 顺序处理目录清理，避免并发删除冲突
   for (const dir of dirsToClean) {
     try {
+      // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
       await fs.remove(dir.target)
       console.log(`✅ 已清理 ${dir.label}`)
     } catch (error) {
@@ -80,9 +78,12 @@ const ask = (q) => new Promise((resolve) => rl.question(q, (ans) => resolve(ans.
     }
   }
 
+  // 顺序处理文件重置，确保依赖关系正确
   for (const file of filesToReset) {
     try {
+      // eslint-disable-next-line no-await-in-loop -- 顺序处理确保依赖关系
       await fs.ensureDir(path.dirname(file.target))
+      // eslint-disable-next-line no-await-in-loop -- 顺序处理确保依赖关系
       await fs.writeJson(file.target, file.defaultContent, { spaces: 2 })
       console.log(`✅ 已重置 ${file.label}`)
     } catch (error) {
