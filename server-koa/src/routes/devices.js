@@ -68,82 +68,81 @@ const router = new Router({
  *                           deviceName:
  *                             type: string
  *                             description: 设备名称
- *                           version:
- *                             type: string
- *                             description: 设备版本
- *                           system:
- *                             type: object
- *                             description: 系统信息
- *                             properties:
- *                               platform:
- *                                 type: string
- *                                 description: 设备平台
- *                               osVersion:
- *                                 type: string
- *                                 nullable: true
- *                                 description: 操作系统版本
- *                               arch:
- *                                 type: string
- *                                 nullable: true
- *                                 description: 系统架构
- *                           network:
- *                             type: object
- *                             description: 网络信息分组
- *                             properties:
- *                               wifiName:
- *                                 type: string
- *                                 nullable: true
- *                                 description: WiFi名称
- *                               wifiSignal:
- *                                 type: number
- *                                 nullable: true
- *                                 description: WiFi信号强度
- *                               publicIp:
- *                                 type: string
- *                                 nullable: true
- *                                 description: 公网IP
- *                               localIp:
- *                                 type: string
- *                                 nullable: true
- *                                 description: 本地IP
- *                               macAddresses:
- *                                 type: array
- *                                 items: { type: string }
- *                                 nullable: true
- *                                 description: MAC 地址列表
- *                           agent:
- *                             type: object
- *                             description: 代理信息
- *                             properties:
- *                               agentVersion:
- *                                 type: string
- *                                 nullable: true
- *                                 description: 设备代理版本
- *                           storage:
- *                             type: object
- *                             description: 存储与权限
- *                             properties:
- *                               diskFreeBytes:
- *                                 type: integer
- *                                 nullable: true
- *                                 description: 可用空间（字节）
- *                               writable:
- *                                 type: boolean
- *                                 nullable: true
- *                                 description: 部署目录可写
- *                           health:
- *                             type: object
- *                             description: 运行健康
- *                             properties:
- *                               uptimeSeconds:
- *                                 type: integer
- *                                 nullable: true
- *                                 description: 运行时长（秒）
- 
  *                           status:
  *                             type: string
  *                             enum: [online, offline, upgrading, error]
  *                             description: 设备状态
+ *                           # 系统信息（扁平化结构）
+ *                           platform:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 设备平台
+ *                           osVersion:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 操作系统版本
+ *                           arch:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 系统架构
+ *                           agentVersion:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 设备代理版本
+ *                           # 网络信息（扁平化结构）
+ *                           wifiName:
+ *                             type: string
+ *                             nullable: true
+ *                             description: WiFi名称
+ *                           wifiSignal:
+ *                             type: number
+ *                             nullable: true
+ *                             description: WiFi信号强度
+ *                           publicIp:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 公网IP
+ *                           localIp:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 本地IP
+ *                           macAddresses:
+ *                             type: array
+ *                             items: { type: string }
+ *                             description: MAC 地址列表
+ *                           # 版本信息（扁平化结构）
+ *                           frontendVersion:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 前端版本号
+ *                           backendVersion:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 后端版本号
+ *                           frontendDeployPath:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 前端部署路径
+ *                           backendDeployPath:
+ *                             type: string
+ *                             nullable: true
+ *                             description: 后端部署路径
+ *                           # 存储信息（扁平化结构）
+ *                           diskFreeBytes:
+ *                             type: integer
+ *                             nullable: true
+ *                             description: 可用空间（字节）
+ *                           writable:
+ *                             type: boolean
+ *                             nullable: true
+ *                             description: 部署目录可写
+ *                           # 健康状态（扁平化结构）
+ *                           uptimeSeconds:
+ *                             type: integer
+ *                             nullable: true
+ *                             description: 运行时长（秒）
+ 
+ *                           # 连接状态
  *                           connectedAt:
  *                             type: string
  *                             format: date-time
@@ -159,130 +158,21 @@ const router = new Router({
  *                             format: date-time
  *                             nullable: true
  *                             description: 最后心跳时间
- *                           deploy:
+ *                           # 部署能力标识
+ *                           hasDeployPath:
+ *                             type: boolean
+ *                             description: 是否配置了部署路径
+ *                           rollbackAvailable:
+ *                             type: boolean
+ *                             description: 是否支持回滚
+ *                           # 部署详情（用于详情页面显示）
+ *                           deployInfo:
  *                             type: object
- *                             description: 部署信息（新配置结构）
+ *                             description: 部署详细信息
  *                             properties:
- *                               capabilities:
- *                                 type: object
- *                                 description: 设备部署能力
- *                                 properties:
- *                                   rollbackAvailable:
- *                                     type: boolean
- *                                     description: 是否支持回滚
- *                                   supportedProjects:
- *                                     type: array
- *                                     items:
- *                                       type: string
- *                                       enum: [frontend, backend]
- *                                     description: 支持的项目类型
- *                               currentDeployments:
- *                                 type: object
- *                                 description: 当前部署状态
- *                                 properties:
- *                                   frontend:
- *                                     type: object
- *                                     properties:
- *                                       version:
- *                                         type: string
- *                                         description: 版本号
- *                                       deployDate:
- *                                         type: string
- *                                         format: date-time
- *                                         nullable: true
- *                                         description: 部署时间
- *                                       deployPath:
- *                                         type: string
- *                                         nullable: true
- *                                         description: 部署路径
- *                                       packageInfo:
- *                                         type: object
- *                                         nullable: true
- *                                         description: 包信息
- *                                       status:
- *                                         type: string
- *                                         description: 部署状态
- *                                       lastOperationType:
- *                                         type: string
- *                                         nullable: true
- *                                         description: 最近操作类型
- *                                       lastOperationDate:
- *                                         type: string
- *                                         format: date-time
- *                                         nullable: true
- *                                         description: 最近操作时间
- *                                   backend:
- *                                     type: object
- *                                     properties:
- *                                       version:
- *                                         type: string
- *                                         description: 版本号
- *                                       deployDate:
- *                                         type: string
- *                                         format: date-time
- *                                         nullable: true
- *                                         description: 部署时间
- *                                       deployPath:
- *                                         type: string
- *                                         nullable: true
- *                                         description: 部署路径
- *                                       packageInfo:
- *                                         type: object
- *                                         nullable: true
- *                                         description: 包信息
- *                                       status:
- *                                         type: string
- *                                         description: 部署状态
- *                                       lastOperationType:
- *                                         type: string
- *                                         nullable: true
- *                                         description: 最近操作类型
- *                                       lastOperationDate:
- *                                         type: string
- *                                         format: date-time
- *                                         nullable: true
- *                                         description: 最近操作时间
- *                               previousDeployments:
- *                                 type: object
- *                                 description: 上一版本部署信息（用于回滚）
- *                                 properties:
- *                                   frontend:
- *                                     type: object
- *                                     properties:
- *                                       version:
- *                                         type: string
- *                                         nullable: true
- *                                       deployPath:
- *                                         type: string
- *                                         nullable: true
- *                                       packageInfo:
- *                                         type: object
- *                                         nullable: true
- *                                       rollbackDate:
- *                                         type: string
- *                                         format: date-time
- *                                         nullable: true
- *                                   backend:
- *                                     type: object
- *                                     properties:
- *                                       version:
- *                                         type: string
- *                                         nullable: true
- *                                       deployPath:
- *                                         type: string
- *                                         nullable: true
- *                                       packageInfo:
- *                                         type: object
- *                                         nullable: true
- *                                       rollbackDate:
- *                                         type: string
- *                                         format: date-time
- *                                         nullable: true
- *                               deploymentHistory:
- *                                 type: array
- *                                 description: 部署历史记录
- *                                 items:
- *                                   type: object
+ *                               rollbackAvailable:
+ *                                 type: boolean
+ *                                 description: 是否支持回滚
  *                               lastDeployStatus:
  *                                 type: string
  *                                 nullable: true
@@ -297,10 +187,44 @@ const router = new Router({
  *                                 format: date-time
  *                                 nullable: true
  *                                 description: 最近回滚时间
- *                           # 提示：deployPaths 字段已移除，请从 deploy.currentDeployments 中获取 deployPath
- *                           hasDeployPath:
- *                             type: boolean
- *                             description: 是否配置了部署路径
+ *                               frontend:
+ *                                 type: object
+ *                                 properties:
+ *                                   version:
+ *                                     type: string
+ *                                     nullable: true
+ *                                     description: 前端版本号
+ *                                   deployDate:
+ *                                     type: string
+ *                                     format: date-time
+ *                                     nullable: true
+ *                                     description: 前端部署时间
+ *                                   deployPath:
+ *                                     type: string
+ *                                     nullable: true
+ *                                     description: 前端部署路径
+ *                               backend:
+ *                                 type: object
+ *                                 properties:
+ *                                   version:
+ *                                     type: string
+ *                                     nullable: true
+ *                                     description: 后端版本号
+ *                                   deployDate:
+ *                                     type: string
+ *                                     format: date-time
+ *                                     nullable: true
+ *                                     description: 后端部署时间
+ *                                   deployPath:
+ *                                     type: string
+ *                                     nullable: true
+ *                                     description: 后端部署路径
+ *                           # 升级历史
+ *                           upgradeHistory:
+ *                             type: array
+ *                             description: 升级历史记录
+ *                             items:
+ *                               type: object
  *                       description: 设备信息列表
  *                     total:
  *                       type: integer
@@ -331,106 +255,98 @@ const router = new Router({
  *               devices:
  *                 - deviceId: "device-001"
  *                   deviceName: "生产服务器-1"
- *                   version: "v1.0.0"
- *                   system:
- *                     platform: "linux"
- *                     osVersion: "5.15"
- *                     arch: "x64"
- *                   network:
- *                     wifiName: "Office-WiFi"
- *                     wifiSignal: -45
- *                     publicIp: "203.0.113.1"
  *                   status: "online"
+ *                   # 系统信息（扁平化）
+ *                   platform: "linux"
+ *                   osVersion: "5.15"
+ *                   arch: "x64"
+ *                   agentVersion: "v1.2.0"
+ *                   # 网络信息（扁平化）
+ *                   wifiName: "Office-WiFi"
+ *                   wifiSignal: -45
+ *                   publicIp: "203.0.113.1"
+ *                   localIp: "192.168.1.100"
+ *                   macAddresses: ["aa:bb:cc:dd:ee:ff"]
+ *                   # 版本信息（扁平化）
+ *                   frontendVersion: "v1.0.0"
+ *                   backendVersion: "v1.0.1"
+ *                   frontendDeployPath: "/opt/frontend"
+ *                   backendDeployPath: "/opt/backend"
+ *                   # 存储信息（扁平化）
+ *                   diskFreeBytes: 10737418240
+ *                   writable: true
+ *                   # 健康状态（扁平化）
+ *                   uptimeSeconds: 86400
+ *                   # 连接状态
  *                   connectedAt: "2025-09-09T03:30:00.000Z"
  *                   disconnectedAt: null
  *                   lastHeartbeat: "2025-09-09T03:35:00.000Z"
- *                   deploy:
- *                     capabilities:
- *                       rollbackAvailable: true
- *                       supportedProjects: ["frontend", "backend"]
- *                     currentDeployments:
- *                       frontend:
- *                         version: "v1.0.0"
- *                         deployDate: "2025-09-09T03:35:00.000Z"
- *                         deployPath: "/opt/frontend"
- *                         packageInfo: null
- *                         status: "deployed"
- *                         lastOperationType: "upgrade"
- *                         lastOperationDate: "2025-09-09T03:35:00.000Z"
- *                       backend:
- *                         version: "v1.0.1"
- *                         deployDate: "2025-09-09T03:30:00.000Z"
- *                         deployPath: "/opt/backend"
- *                         packageInfo: null
- *                         status: "deployed"
- *                         lastOperationType: "upgrade"
- *                         lastOperationDate: "2025-09-09T03:30:00.000Z"
- *                     previousDeployments:
- *                       frontend:
- *                         version: "v0.9.5"
- *                         deployPath: "/opt/frontend"
- *                         packageInfo: null
- *                         rollbackDate: null
- *                       backend:
- *                         version: "v0.9.8"
- *                         deployPath: "/opt/backend"
- *                         packageInfo: null
- *                         rollbackDate: null
- *                     deploymentHistory: []
+ *                   # 部署能力标识
+ *                   hasDeployPath: true
+ *                   rollbackAvailable: true
+ *                   # 部署详情
+ *                   deployInfo:
+ *                     rollbackAvailable: true
  *                     lastDeployStatus: "success"
  *                     lastDeployAt: "2025-09-09T03:35:00.000Z"
  *                     lastRollbackAt: null
- *                   # 提示：deployPaths 字段已移除
+ *                     frontend:
+ *                       version: "v1.0.0"
+ *                       deployDate: "2025-09-09T03:35:00.000Z"
+ *                       deployPath: "/opt/frontend"
+ *                     backend:
+ *                       version: "v1.0.1"
+ *                       deployDate: "2025-09-09T03:30:00.000Z"
+ *                       deployPath: "/opt/backend"
+ *                   # 升级历史
+ *                   upgradeHistory: []
  *                 - deviceId: "device-002"
  *                   deviceName: "生产服务器-2"
- *                   version: "v0.9.0"
- *                   system:
- *                     platform: "linux"
- *                   network:
- *                     wifiName: null
- *                     wifiSignal: null
- *                     publicIp: null
  *                   status: "offline"
+ *                   # 系统信息（扁平化）
+ *                   platform: "linux"
+ *                   osVersion: null
+ *                   arch: null
+ *                   agentVersion: null
+ *                   # 网络信息（扁平化）
+ *                   wifiName: null
+ *                   wifiSignal: null
+ *                   publicIp: null
+ *                   localIp: null
+ *                   macAddresses: []
+ *                   # 版本信息（扁平化）
+ *                   frontendVersion: null
+ *                   backendVersion: null
+ *                   frontendDeployPath: null
+ *                   backendDeployPath: null
+ *                   # 存储信息（扁平化）
+ *                   diskFreeBytes: null
+ *                   writable: null
+ *                   # 健康状态（扁平化）
+ *                   uptimeSeconds: null
+ *                   # 连接状态
  *                   connectedAt: "2025-09-09T02:30:00.000Z"
  *                   disconnectedAt: "2025-09-09T02:50:00.000Z"
  *                   lastHeartbeat: "2025-09-09T02:45:00.000Z"
- *                   deploy:
- *                     capabilities:
- *                       rollbackAvailable: false
- *                       supportedProjects: ["frontend", "backend"]
- *                     currentDeployments:
- *                       frontend:
- *                         version: "unknown"
- *                         deployDate: null
- *                         deployPath: null
- *                         packageInfo: null
- *                         status: "unknown"
- *                         lastOperationType: null
- *                         lastOperationDate: null
- *                       backend:
- *                         version: "unknown"
- *                         deployDate: null
- *                         deployPath: null
- *                         packageInfo: null
- *                         status: "unknown"
- *                         lastOperationType: null
- *                         lastOperationDate: null
- *                     previousDeployments:
- *                       frontend:
- *                         version: null
- *                         deployPath: null
- *                         packageInfo: null
- *                         rollbackDate: null
- *                       backend:
- *                         version: null
- *                         deployPath: null
- *                         packageInfo: null
- *                         rollbackDate: null
- *                     deploymentHistory: []
+ *                   # 部署能力标识
+ *                   hasDeployPath: false
+ *                   rollbackAvailable: false
+ *                   # 部署详情
+ *                   deployInfo:
+ *                     rollbackAvailable: false
  *                     lastDeployStatus: null
  *                     lastDeployAt: null
  *                     lastRollbackAt: null
- *                   # 提示：deployPaths 字段已移除
+ *                     frontend:
+ *                       version: null
+ *                       deployDate: null
+ *                       deployPath: null
+ *                     backend:
+ *                       version: null
+ *                       deployDate: null
+ *                       deployPath: null
+ *                   # 升级历史
+ *                   upgradeHistory: []
  *               total: 2
  *               onlineCount: 1
  *               pageNum: 1
