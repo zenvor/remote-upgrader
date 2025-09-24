@@ -45,8 +45,15 @@ function ask(question) {
     try {
       // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
       await fs.remove(item.target)
-      successCount++
-      console.log(`✅ 已清理 ${item.label}`)
+      // 确认目录是否完全删除
+      // eslint-disable-next-line no-await-in-loop -- 需要确认删除状态
+      const exists = await fs.pathExists(item.target)
+      if (exists) {
+        console.warn(`⚠️ ${item.label} 未完全清理，可能存在权限或占用问题`)
+      } else {
+        successCount++
+        console.log(`✅ 已清理 ${item.label}`)
+      }
     } catch (error) {
       console.warn(`⚠️ 无法清理 ${item.label}: ${error.message}`)
     }

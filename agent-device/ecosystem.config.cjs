@@ -8,6 +8,8 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '512M',
+      exp_backoff_restart_delay: 2000, // 指数退避重启
+      kill_timeout: 5000, // 优雅关闭超时
       env: {
         NODE_ENV: 'development'
       },

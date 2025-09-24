@@ -1,6 +1,7 @@
 // 使用 ES Module 语法
 // 中文注释：设备端入口文件，负责启动 DeviceAgent
 import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import config from './config/config.js'
 import DeviceAgent from './core/deviceAgent.js'
 
@@ -89,8 +90,13 @@ process.on('unhandledRejection', (reason, promise) => {
   gracefulShutdown('unhandledRejection')
 })
 
-// 中文注释：ESM 判断是否直接运行当前文件
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
-if (isMain) {
+// 中文注释：ESM 判断是否直接运行当前文件（兼容 PM2）
+const argvPath = process.argv[1] && path.resolve(process.argv[1])
+const isMain = argvPath && argvPath === fileURLToPath(import.meta.url)
+
+// PM2 下也视为主进程
+const isPm2 = !!process.env.pm_id
+
+if (isMain || isPm2) {
   start().catch(console.error)
 }

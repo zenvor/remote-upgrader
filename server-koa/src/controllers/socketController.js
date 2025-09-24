@@ -1,5 +1,6 @@
 // 中文注释：ESM 导入
 import deviceManager from '../models/deviceManager.js'
+import { updateDeviceTaskStatus } from './batchController.js'
 import { DateHelper } from '../utils/common.js'
 
 /**
@@ -335,6 +336,72 @@ export function setupSocketHandlers(io) {
         socket.broadcast.emit('operation:result', operationEvent)
       } catch (error) {
         console.error('处理命令执行结果失败:', error)
+      }
+    })
+
+    // 批量任务状态更新
+    socket.on('batch:device_status', (data) => {
+      try {
+        if (!data || typeof data !== 'object') {
+          console.warn('批量任务状态更新：无效数据格式')
+          return
+        }
+
+        const { taskId, deviceId, status, error, progress } = data
+
+        if (!taskId || !deviceId || !status) {
+          console.warn('批量任务状态更新：缺少必要参数', { taskId, deviceId, status })
+          return
+        }
+
+        // 更新设备任务状态
+        const updated = updateDeviceTaskStatus(taskId, deviceId, status, error)
+
+        if (updated) {
+          console.log(`📊 批量任务设备状态更新: ${taskId} - ${deviceId} - ${status}`)
+
+          // 向所有管理客户端广播状态更新
+          socket.broadcast.emit('batch:task_progress', {
+            taskId,
+            deviceId,
+            status,
+            error,
+            progress,
+            timestamp: new Date().toISOString()
+          })
+        } else {
+          console.warn(`批量任务状态更新失败: ${taskId} - ${deviceId}`)
+        }
+
+      } catch (error) {
+        console.error('处理批量任务状态更新失败:', error)
+      }
+    })
+
+    // 批量任务设备进度报告
+    socket.on('batch:device_progress', (data) => {
+      try {
+        if (!data || typeof data !== 'object') {
+          return
+        }
+
+        const { taskId, deviceId, progress, currentStep, totalSteps, message } = data
+
+        // 向管理客户端广播设备进度
+        socket.broadcast.emit('batch:device_progress', {
+          taskId,
+          deviceId,
+          progress: Math.min(100, Math.max(0, progress || 0)), // 确保进度在0-100之间
+          currentStep,
+          totalSteps,
+          message,
+          timestamp: new Date().toISOString()
+        })
+
+        console.log(`🔄 批量任务设备进度: ${taskId} - ${deviceId} - ${progress}%`)
+
+      } catch (error) {
+        console.error('处理批量任务设备进度失败:', error)
       }
     })
 

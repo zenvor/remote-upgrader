@@ -63,21 +63,10 @@ export class PathValidator {
       // 2. 去除多余空格
       const trimmedPath = inputPath.trim()
 
-      // 3. 检查危险模式
-      for (const pattern of this.dangerousPatterns) {
-        if (pattern.test(trimmedPath)) {
-          ErrorLogger.logWarning(`路径安全检查失败 (${operation})`, `检测到危险模式 ${pattern}`, { path: trimmedPath })
-          return {
-            valid: false,
-            reason: `路径包含危险模式: ${pattern}`
-          }
-        }
-      }
-
-      // 4. 解析绝对路径
+      // 3. 解析绝对路径
       const resolvedPath = path.resolve(trimmedPath)
 
-      // 5. 检查是否在允许的基础路径内
+      // 4. 优先检查白名单 - 如果在白名单中则跳过危险模式检查
       if (this.allowedBasePaths.length > 0) {
         const isAllowed = this.allowedBasePaths.some((basePath) => {
           return resolvedPath.startsWith(basePath)
@@ -88,6 +77,17 @@ export class PathValidator {
           return {
             valid: false,
             reason: `路径不在允许的基础路径范围内`
+          }
+        }
+      } else {
+        // 5. 仅在没有白名单时检查危险模式
+        for (const pattern of this.dangerousPatterns) {
+          if (pattern.test(trimmedPath)) {
+            ErrorLogger.logWarning(`路径安全检查失败 (${operation})`, `检测到危险模式 ${pattern}`, { path: trimmedPath })
+            return {
+              valid: false,
+              reason: `路径包含危险模式: ${pattern}`
+            }
           }
         }
       }

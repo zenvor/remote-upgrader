@@ -43,6 +43,12 @@ class DeviceManager {
           lastHeartbeat: null,
           disconnectedAt: deviceData.status.lastHeartbeat
         })
+
+        // 同步离线状态到存储
+        if (deviceData.status.current === 'online') {
+          // eslint-disable-next-line no-await-in-loop -- 需要顺序同步状态避免并发冲突
+          await recordDeviceDisconnection(deviceData.deviceId)
+        }
       }
 
       console.log(`从存储中恢复了 ${storedDevices.length} 个设备信息`)

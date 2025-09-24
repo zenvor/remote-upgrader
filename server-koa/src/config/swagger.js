@@ -244,6 +244,10 @@ const swaggerOptions = {
       {
         name: '版本管理',
         description: '查询当前部署版本并执行单步回滚'
+      },
+      {
+        name: '批量操作',
+        description: '批量升级和回滚任务管理'
       }
     ]
   },

@@ -2,7 +2,7 @@
   <a-card class="query-card" style="margin-bottom: 16px" :body-style="{ padding: '20px 20px 0' }" :bordered="false">
     <a-form ref="queryFormRef" layout="inline" :model="queryParams" class="query-form">
       <a-form-item label="设备名称或ID" name="search">
-        <a-input v-model:value="queryParams.search" allow-clear placeholder="搜索设备名称或ID" style="width: 240px" />
+        <a-input v-model:value="queryParams.search" allow-clear placeholder="搜索设备名称或ID" style="width: 200px" />
       </a-form-item>
 
       <a-form-item label="状态" name="status">
@@ -54,7 +54,7 @@ const queryParams = defineModel('modelValue', {
 })
 
 // 表单引用
-const queryFormRef = ref()
+const queryFormRef = ref(null)
 
 // 状态选项
 const statusOptions = [

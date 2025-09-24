@@ -331,12 +331,28 @@ export default class DeviceIdGenerator {
       const osInfo = await si.osInfo()
       const networkInterfaces = await si.networkInterfaces()
 
+      // 中文注释：按照优先级挑选可用的主机名，过滤 localhost 等无效值
+      const resolveHostname = (...values) => {
+        for (const value of values) {
+          if (!value || typeof value !== 'string') continue
+          const trimmed = value.trim()
+          if (!trimmed) continue
+          const lower = trimmed.toLowerCase()
+          if (lower === 'localhost' || lower === 'localhost.localdomain') continue
+          return trimmed
+        }
+        return null
+      }
+
+      const hostname =
+        resolveHostname(osInfo?.hostname, process.env.COMPUTERNAME, process.env.HOSTNAME, os.hostname()) || null
+
       return {
         manufacturer: system.manufacturer,
         model: system.model,
         version: system.version,
         platform: osInfo.platform,
-        hostname: osInfo.hostname,
+        hostname,
         arch: osInfo.arch,
         networkInterfaces: networkInterfaces.map((iface) => ({
           name: iface.iface,

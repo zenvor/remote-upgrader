@@ -14,11 +14,6 @@
         :show-total="true"
         @refresh="fetchData"
       >
-        <template #title>
-          <a-space align="center">
-            <span>设备管理</span>
-          </a-space>
-        </template>
         <template #actions>
           <a-button type="primary" :disabled="!hasSelected" @click="showBatchUpgradeDialog">
             <UploadIcon />
@@ -28,6 +23,14 @@
             <RefreshIcon />
             <span style="margin-left: 4px">批量回滚</span>
           </a-button>
+          <a-button @click="showBatchTaskModal">
+            <EyeOutlined />
+            <span style="margin-left: 4px">快速监控</span>
+          </a-button>
+          <a-button @click="goToTaskManagement">
+            <DashboardOutlined />
+            <span style="margin-left: 4px">任务管理中心</span>
+          </a-button>
         </template>
       </OperationBar>
 
@@ -35,7 +38,7 @@
       <a-table
         :data-source="devices"
         :columns="devicesColumns"
-        :loading="tableLoading || loading"
+        :loading="loading"
         row-key="deviceId"
         :row-selection="rowSelection"
         :pagination="pagination"
@@ -142,6 +145,17 @@
       </a-table>
     </a-card>
 
+    <!-- 批量操作对话框 -->
+    <BatchOperationDialog
+      v-model:open="batchOperationVisible"
+      :operation-type="batchOperationType"
+      :devices="selectedDevices"
+      @success="handleBatchOperationSuccess"
+    />
+
+    <!-- 批量任务监控对话框 -->
+    <BatchTaskModal v-model:open="batchTaskVisible" />
+
     <!-- 升级对话框 -->
     <DeviceUpgradeDialog
       v-model:open="upgradeDialogVisible"
@@ -162,22 +176,27 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-// Use TDesign table via columns config
 import { deviceApi } from '@/api'
 import OperationBar from '@/components/OperationBar.vue'
 import toast from '@/utils/toast'
 import {
+  DashboardOutlined,
   EyeOutlined,
   ReloadOutlined as RefreshIcon,
   RocketOutlined,
   UploadOutlined as UploadIcon
 } from '@ant-design/icons-vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import BatchOperationDialog from './components/BatchOperationDialog.vue'
+import BatchTaskModal from './components/BatchTaskModal.vue'
 import DeviceDetailModal from './components/DeviceDetailModal.vue'
 import DeviceQueryForm from './components/DeviceQueryForm.vue'
 import DeviceRollbackDialog from './components/DeviceRollbackDialog.vue'
 import DeviceStatsCards from './components/DeviceStatsCards.vue'
 import DeviceUpgradeDialog from './components/DeviceUpgradeDialog.vue'
+
+const router = useRouter()
 
 // 数据状态
 const devices = ref([])
@@ -187,7 +206,6 @@ const loading = ref(false)
 const deviceLogs = ref([])
 
 // 分页状态
-const tableLoading = ref(false)
 const deviceDetailVisible = ref(false)
 const selectedDevice = ref(null)
 
@@ -215,6 +233,13 @@ const upgradeTargetDevices = ref([])
 const rollbackDialogVisible = ref(false)
 const rollbackTargetDevices = ref([])
 
+// 批量操作对话框状态
+const batchOperationVisible = ref(false)
+const batchOperationType = ref('upgrade') // 'upgrade' 或 'rollback'
+
+// 批量任务监控状态
+const batchTaskVisible = ref(false)
+
 // 设备统计
 const deviceStats = computed(() => {
   const online = onlineCount.value || devices.value.filter((d) => d.status === 'online').length
@@ -234,37 +259,22 @@ const deviceStatsForComponent = computed(() => ({
 const hasSelected = computed(() => selectedDeviceKeys.value.length > 0)
 
 // 获取设备列表（支持筛选参数）
-const fetchDevices = async (queryParams = {}) => {
+const fetchData = async () => {
   loading.value = true
   try {
-    const response = await deviceApi.getDeviceList(queryParams)
-    devices.value = response?.devices
-    onlineCount.value = response?.onlineCount || 0
-    return response
-  } catch (error) {
-    console.error('获取设备列表失败:', error)
-    toast.error(error.message || '获取设备列表失败', '设备列表')
-    throw error
-  } finally {
-    loading.value = false
-  }
-}
-
-// 获取设备列表
-const fetchData = async () => {
-  tableLoading.value = true
-  try {
-    const response = await fetchDevices({
+    const response = await deviceApi.getDeviceList({
       ...queryParams.value,
       pageNum: pagination.current,
       pageSize: pagination.pageSize
     })
-
     pagination.total = response.total
+    devices.value = response.devices
+    onlineCount.value = response.onlineCount
+    return response
   } catch (error) {
-    console.error('加载设备列表失败:', error)
+    console.error('获取设备列表失败:', error)
   } finally {
-    tableLoading.value = false
+    loading.value = false
   }
 }
 
@@ -336,14 +346,34 @@ const showDeviceDetails = (device) => {
 
 // 显示批量升级对话框
 const showBatchUpgradeDialog = () => {
-  upgradeTargetDevices.value = [...selectedDevices.value]
-  upgradeDialogVisible.value = true
+  batchOperationType.value = 'upgrade'
+  batchOperationVisible.value = true
 }
 
 // 显示批量回滚对话框
 const showBatchRollbackDialog = () => {
-  rollbackTargetDevices.value = [...selectedDevices.value]
-  rollbackDialogVisible.value = true
+  batchOperationType.value = 'rollback'
+  batchOperationVisible.value = true
+}
+
+// 显示批量任务监控
+const showBatchTaskModal = () => {
+  batchTaskVisible.value = true
+}
+
+// 跳转到任务管理中心
+const goToTaskManagement = () => {
+  router.push('/batch-tasks')
+}
+
+// 批量操作成功回调
+const handleBatchOperationSuccess = (response) => {
+  toast.success(`批量任务创建成功，任务ID: ${response.taskId}`, '批量操作')
+  fetchData() // 刷新设备列表
+  // 自动打开任务监控
+  setTimeout(() => {
+    batchTaskVisible.value = true
+  }, 1000)
 }
 
 // 显示单个设备升级对话框

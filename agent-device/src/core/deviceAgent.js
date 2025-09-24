@@ -2,6 +2,7 @@
 import fs from 'fs-extra'
 import os from 'node:os'
 import path from 'node:path'
+import { execSync } from 'node:child_process'
 import { io } from 'socket.io-client'
 import si from 'systeminformation'
 import DeployManager from '../services/deployManager.js'
@@ -269,11 +270,15 @@ export default class DeviceAgent {
       const agentVersion = await this.getAgentVersion()
 
       // 先快速注册基本信息，然后异步更新WiFi和公网IP信息
+      const configuredName = (this.config.device.name || '').trim()
+      const hasCustomConfigName = configuredName && configuredName !== '未知设备'
+      const preferConfigName = this.config.device.preferConfigName && hasCustomConfigName
+
       const basicDeviceInfo = {
         deviceId: this.config.device.id,
-        deviceName: this.config.device.preferConfigName
-          ? this.config.device.name // 优先使用配置的设备名称
-          : systemHostname || this.config.device.name, // 优先使用系统主机名
+        deviceName: preferConfigName
+          ? configuredName // 优先使用配置的设备名称
+          : systemHostname || configuredName || '未知设备', // 优先使用系统主机名，退化为配置/默认名
         // 分组后的字段
         system: {
           platform: process.platform || this.config.device.platform,
@@ -449,6 +454,10 @@ export default class DeviceAgent {
     const osHostname = this.getHostnameFromOS()
     if (osHostname) return osHostname
 
+    // 方法2.1：Windows 命令行/PowerShell 获取
+    const windowsCommandHostname = this.getHostnameFromWindowsCommand()
+    if (windowsCommandHostname) return windowsCommandHostname
+
     // 方法3：从环境变量获取
     const envHostname = this.getHostnameFromEnv()
     if (envHostname) return envHostname
@@ -478,9 +487,13 @@ export default class DeviceAgent {
     try {
       const hostname = os.hostname()
       if (hostname && hostname.trim()) {
-        const cleanedHostname = this.cleanHostname(hostname.trim())
-        console.log('🖥️  从OS模块获取主机名:', cleanedHostname)
-        return cleanedHostname
+        const normalized = hostname.trim()
+        const lower = normalized.toLowerCase()
+        if (lower !== 'localhost' && lower !== 'localhost.localdomain') {
+          const cleanedHostname = this.cleanHostname(normalized)
+          console.log('🖥️  从OS模块获取主机名:', cleanedHostname)
+          return cleanedHostname
+        }
       }
     } catch {
       // 忽略错误，尝试下一种方法
@@ -492,9 +505,49 @@ export default class DeviceAgent {
     const envHostname = process.env.COMPUTERNAME || process.env.HOSTNAME
     if (envHostname && envHostname.trim()) {
       const hostname = envHostname.trim()
-      console.log('🖥️  从环境变量获取主机名:', hostname)
-      return hostname
+      const lower = hostname.toLowerCase()
+      if (lower !== 'localhost' && lower !== 'localhost.localdomain') {
+        console.log('🖥️  从环境变量获取主机名:', hostname)
+        return hostname
+      }
     }
+    return null
+  }
+
+  // 中文注释：在 Windows 平台上通过系统命令获取主机名，作为额外兜底
+  getHostnameFromWindowsCommand() {
+    if (process.platform !== 'win32') {
+      return null
+    }
+
+    try {
+      const commandHostname = execSync('hostname', { encoding: 'utf8', timeout: 2000 }).trim()
+      if (commandHostname) {
+        const cleaned = this.cleanHostname(commandHostname)
+        console.log('🖥️  通过 hostname 命令获取主机名:', cleaned)
+        return cleaned
+      }
+    } catch (error) {
+      console.warn('⚠️ Windows hostname 命令获取主机名失败:', error.message)
+    }
+
+    try {
+      const powershellHostname = execSync(
+        'powershell -NoProfile -Command "(Get-CimInstance -ClassName Win32_ComputerSystem).Name"',
+        { encoding: 'utf8', timeout: 4000 }
+      )
+        .replace(/\r?\n/g, '')
+        .trim()
+
+      if (powershellHostname) {
+        const cleaned = this.cleanHostname(powershellHostname)
+        console.log('🖥️  通过 PowerShell 获取主机名:', cleaned)
+        return cleaned
+      }
+    } catch (error) {
+      console.warn('⚠️ PowerShell 获取主机名失败:', error.message)
+    }
+
     return null
   }
 
@@ -502,9 +555,12 @@ export default class DeviceAgent {
     try {
       const userInfo = os.userInfo()
       if (userInfo.username) {
+        // 根据平台生成合适的设备类型后缀
+        const deviceType = this.getDeviceTypeByPlatform()
+
         // 优先使用中文设备名，如果用户名看起来是英文名则使用"的设备"
         const isEnglishName = /^[a-zA-Z\s]+$/.test(userInfo.username)
-        const hostname = isEnglishName ? `${userInfo.username}的MacBook` : `${userInfo.username}的设备`
+        const hostname = isEnglishName ? `${userInfo.username}的${deviceType}` : `${userInfo.username}的设备`
         console.log('🖥️  使用用户名作为设备名:', hostname)
         return hostname
       }
@@ -512,6 +568,61 @@ export default class DeviceAgent {
       // 忽略错误
     }
     return null
+  }
+
+  /**
+   * 根据平台获取设备类型名称
+   */
+  getDeviceTypeByPlatform() {
+    switch (process.platform) {
+      case 'darwin':
+        // macOS 系统，尝试检测是否为 MacBook
+        return this.getMacDeviceType()
+      case 'win32':
+        return 'Windows电脑'
+      case 'linux':
+        return 'Linux设备'
+      default:
+        return '设备'
+    }
+  }
+
+  /**
+   * 获取 Mac 设备类型
+   */
+  getMacDeviceType() {
+    try {
+      // 尝试通过系统信息获取具体的 Mac 型号
+      const model = execSync('sysctl -n hw.model', { encoding: 'utf8', timeout: 2000 }).trim()
+
+      if (model.includes('MacBook')) {
+        if (model.includes('Air')) {
+          return 'MacBook Air'
+        } else if (model.includes('Pro')) {
+          return 'MacBook Pro'
+        } else {
+          return 'MacBook'
+        }
+      } else if (model.includes('iMac')) {
+        return 'iMac'
+      } else if (model.includes('Mac')) {
+        if (model.includes('mini')) {
+          return 'Mac mini'
+        } else if (model.includes('Studio')) {
+          return 'Mac Studio'
+        } else if (model.includes('Pro')) {
+          return 'Mac Pro'
+        } else {
+          return 'Mac'
+        }
+      }
+
+      // 如果无法识别，返回通用名称
+      return 'Mac设备'
+    } catch (error) {
+      console.error('⚠️ 获取 Mac 设备类型失败:', error.message)
+      return 'Mac设备'
+    }
   }
 
   cleanHostname(hostname) {
@@ -628,11 +739,57 @@ export default class DeviceAgent {
   }
 
   /**
-   * 获取当前连接的WiFi信息（带超时处理）
+   * 获取当前连接的WiFi信息（带超时处理和多种策略）
    */
   async getWifiInfo() {
     try {
-      // 设置超时：最多等待配置的时间获取WiFi信息
+      // 策略1：尝试使用 systeminformation 获取
+      const siResult = await this.getWifiInfoFromSystemInformation()
+
+      // 如果获取到有效的 WiFi 名称（非 <redacted>），直接返回
+      if (siResult && siResult.ssid && !siResult.ssid.includes('redacted')) {
+        console.log('✅ 通过 systeminformation 获取到 WiFi 信息:', siResult.ssid)
+        return siResult
+      }
+
+      // 策略2：如果是 <redacted>，尝试原生系统命令
+      console.log('⚠️ systeminformation 返回 redacted，尝试原生命令获取 WiFi 信息')
+      const nativeResult = await this.getWifiInfoFromNativeCommand()
+
+      if (nativeResult && nativeResult.ssid) {
+        console.log('✅ 通过原生命令获取到 WiFi 信息:', nativeResult.ssid)
+        // 合并信号强度信息（如果有）
+        return {
+          ssid: nativeResult.ssid,
+          signal: siResult?.signal || nativeResult.signal || null,
+          frequency: siResult?.frequency || nativeResult.frequency || null,
+          type: siResult?.type || nativeResult.type || null
+        }
+      }
+
+      // 如果两种方法都失败，返回 systeminformation 的结果（可能包含信号强度等其他信息）
+      return siResult || {
+        ssid: null,
+        signal: null,
+        frequency: null,
+        type: null
+      }
+    } catch (error) {
+      console.error('⚠️ 获取WiFi信息失败:', error.message)
+      return {
+        ssid: null,
+        signal: null,
+        frequency: null,
+        type: null
+      }
+    }
+  }
+
+  /**
+   * 通过 systeminformation 获取 WiFi 信息
+   */
+  async getWifiInfoFromSystemInformation() {
+    try {
       const wifiPromise = si.wifiConnections()
       const timeoutPromise = new Promise((_resolve, reject) => {
         setTimeout(() => reject(new Error('WiFi info timeout')), this.constants.wifiTimeout)
@@ -652,20 +809,254 @@ export default class DeviceAgent {
         }
       }
 
+      return null
+    } catch (error) {
+      console.error('⚠️ systeminformation 获取WiFi信息失败:', error.message)
+      return null
+    }
+  }
+
+  /**
+   * 通过原生系统命令获取 WiFi 信息
+   */
+  async getWifiInfoFromNativeCommand() {
+    try {
+      if (process.platform === 'darwin') {
+        return await this.getWifiInfoMacOS()
+      } else if (process.platform === 'win32') {
+        return await this.getWifiInfoWindows()
+      } else if (process.platform === 'linux') {
+        return await this.getWifiInfoLinux()
+      }
+
+      return null
+    } catch (error) {
+      console.error('⚠️ 原生命令获取WiFi信息失败:', error.message)
+      return null
+    }
+  }
+
+  /**
+   * macOS 系统获取 WiFi 信息
+   */
+  async getWifiInfoMacOS() {
+    try {
+      const { execSync } = await import('child_process')
+
+      // 策略1：尝试使用新的 wdutil 命令
+      try {
+        const wdutilResult = execSync('wdutil info', {
+          encoding: 'utf8',
+          timeout: this.constants.wifiTimeout
+        })
+
+        // 解析 wdutil 输出获取 SSID
+        const ssidMatch = wdutilResult.match(/\s*SSID\s*:\s*(.+)/)
+        if (ssidMatch) {
+          const ssid = ssidMatch[1].trim()
+
+          // 尝试获取信号强度
+          let signal = null
+          const rssiMatch = wdutilResult.match(/\s*RSSI\s*:\s*(-?\d+)/)
+          if (rssiMatch) {
+            signal = parseInt(rssiMatch[1])
+          }
+
+          return {
+            ssid,
+            signal,
+            frequency: null,
+            type: null
+          }
+        }
+      } catch {
+        console.log('⚠️ wdutil 命令失败，尝试备用方法')
+      }
+
+      // 策略2：尝试使用 networksetup 命令
+      try {
+        const networkResult = execSync('networksetup -getairportnetwork en0', {
+          encoding: 'utf8',
+          timeout: this.constants.wifiTimeout
+        })
+
+        // 解析输出 "Current Wi-Fi Network: NetworkName"
+        const networkMatch = networkResult.match(/Current Wi-Fi Network:\s*(.+)/)
+        if (networkMatch) {
+          const ssid = networkMatch[1].trim()
+          return {
+            ssid,
+            signal: null,
+            frequency: null,
+            type: null
+          }
+        }
+      } catch {
+        console.log('⚠️ networksetup 命令失败，尝试废弃的 airport 命令')
+      }
+
+      // 策略3：作为最后手段使用废弃的 airport 命令（忽略警告）
+      try {
+        const ssidResult = execSync('/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I', {
+          encoding: 'utf8',
+          timeout: this.constants.wifiTimeout
+        })
+
+        // 解析输出获取 SSID
+        const ssidMatch = ssidResult.match(/\s*SSID:\s*(.+)/)
+        const ssid = ssidMatch ? ssidMatch[1].trim() : null
+
+        if (!ssid) {
+          return null
+        }
+
+        // 尝试获取信号强度
+        let signal = null
+        try {
+          const rssiMatch = ssidResult.match(/\s*agrCtlRSSI:\s*(-?\d+)/)
+          if (rssiMatch) {
+            signal = parseInt(rssiMatch[1])
+          }
+        } catch (error) {
+          console.error('⚠️ 获取 WiFi 信号强度失败:', error.message)
+        }
+
+        return {
+          ssid,
+          signal,
+          frequency: null,
+          type: null
+        }
+      } catch {
+        console.error('⚠️ 所有 macOS WiFi 命令都失败了')
+      }
+
+      return null
+    } catch (error) {
+      console.error('⚠️ macOS WiFi 命令执行失败:', error.message)
+      return null
+    }
+  }
+
+  /**
+   * Windows 系统获取 WiFi 信息
+   */
+  async getWifiInfoWindows() {
+    try {
+      const { execSync } = await import('child_process')
+
+      // 使用 netsh 命令获取当前连接的 WiFi 信息
+      // 获取配置文件列表（暂时不使用，但保留用于未来扩展）
+      execSync('netsh wlan show profiles', {
+        encoding: 'utf8',
+        timeout: this.constants.wifiTimeout
+      })
+
+      // 解析活动连接
+      const interfaceResult = execSync('netsh wlan show interfaces', {
+        encoding: 'utf8',
+        timeout: this.constants.wifiTimeout
+      })
+
+      const ssidMatch = interfaceResult.match(/\s*SSID\s*:\s*(.+)/)
+      const ssid = ssidMatch ? ssidMatch[1].trim() : null
+
+      if (!ssid) {
+        return null
+      }
+
+      // 尝试获取信号强度
+      let signal = null
+      try {
+        const signalMatch = interfaceResult.match(/\s*Signal\s*:\s*(\d+)%/)
+        if (signalMatch) {
+          // 将百分比转换为 dBm 大概值（简化计算）
+          const percentage = parseInt(signalMatch[1])
+          signal = Math.round(-100 + (percentage * 0.7)) // 简化的 dBm 估算
+        }
+      } catch (error) {
+        console.error('⚠️ 获取 WiFi 信号强度失败:', error.message)
+      }
+
       return {
-        ssid: null,
-        signal: null,
+        ssid,
+        signal,
         frequency: null,
         type: null
       }
     } catch (error) {
-      console.error('⚠️ 获取WiFi信息失败:', error.message)
+      console.error('⚠️ Windows WiFi 命令执行失败:', error.message)
+      return null
+    }
+  }
+
+  /**
+   * Linux 系统获取 WiFi 信息
+   */
+  async getWifiInfoLinux() {
+    try {
+      const { execSync } = await import('child_process')
+
+      // 尝试使用 iwgetid 获取 SSID
+      let ssid = null
+      try {
+        const ssidResult = execSync('iwgetid -r', {
+          encoding: 'utf8',
+          timeout: this.constants.wifiTimeout
+        })
+        ssid = ssidResult.trim()
+      } catch (error) {
+        // 如果 iwgetid 失败，尝试 nmcli
+        try {
+          const nmcliResult = execSync('nmcli -t -f active,ssid dev wifi | grep "yes"', {
+            encoding: 'utf8',
+            timeout: this.constants.wifiTimeout
+          })
+          const parts = nmcliResult.trim().split(':')
+          if (parts.length > 1) {
+            ssid = parts[1]
+          }
+        } catch (nmcliError) {
+          console.error('⚠️ Linux WiFi 命令都失败了:', error.message, nmcliError.message)
+          return null
+        }
+      }
+
+      if (!ssid) {
+        return null
+      }
+
+      // 尝试获取信号强度
+      let signal = null
+      try {
+        const signalResult = execSync('cat /proc/net/wireless', {
+          encoding: 'utf8',
+          timeout: this.constants.wifiTimeout
+        })
+        // 解析无线信号强度（简化处理）
+        const lines = signalResult.split('\n')
+        for (const line of lines) {
+          if (line.includes(':')) {
+            const parts = line.trim().split(/\s+/)
+            if (parts.length >= 4) {
+              signal = parseInt(parts[3]) // 信号质量
+              break
+            }
+          }
+        }
+      } catch (error) {
+        console.error('⚠️ 获取 Linux WiFi 信号强度失败:', error.message)
+      }
+
       return {
-        ssid: null,
-        signal: null,
+        ssid,
+        signal,
         frequency: null,
         type: null
       }
+    } catch (error) {
+      console.error('⚠️ Linux WiFi 命令执行失败:', error.message)
+      return null
     }
   }
 

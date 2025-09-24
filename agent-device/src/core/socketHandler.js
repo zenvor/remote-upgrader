@@ -146,6 +146,7 @@ export default class SocketHandler {
     console.log('执行升级命令:', data)
 
     const commandId = messageId || data?.commandId || null
+    const batchTaskId = data?.batchTaskId || null // 批量任务ID
 
     try {
       // 参数验证
@@ -159,10 +160,18 @@ export default class SocketHandler {
         throw new Error('升级命令缺少必需参数: project, fileName')
       }
 
+      // 报告状态（包括批量任务状态）
       this.agent.reportStatus('upgrading')
+      if (batchTaskId) {
+        this.reportBatchTaskStatus(batchTaskId, 'upgrading', null, 10)
+      }
 
       // 1. 下载升级包
       console.log('开始下载升级包...')
+      if (batchTaskId) {
+        this.reportBatchTaskProgress(batchTaskId, 20, 1, 3, '正在下载升级包...')
+      }
+
       const downloadResult = await this.agent.getDownloadManager().downloadPackage(project, fileName)
 
       if (!downloadResult.success) {
@@ -171,6 +180,10 @@ export default class SocketHandler {
 
       // 2. 部署升级包
       console.log('开始部署升级包...')
+      if (batchTaskId) {
+        this.reportBatchTaskProgress(batchTaskId, 60, 2, 3, '正在部署升级包...')
+      }
+
       const deployResult = await this.agent
         .getDeployManager()
         .deploy(project, downloadResult.filePath, version, deployPath, data.fileMD5 || null)
@@ -180,6 +193,9 @@ export default class SocketHandler {
       }
 
       this.agent.reportStatus('upgrade_success')
+      if (batchTaskId) {
+        this.reportBatchTaskStatus(batchTaskId, 'success', null, 100)
+      }
 
       if (commandId) {
         const packageInfo = deployResult.packageInfo ? { ...deployResult.packageInfo } : null
@@ -206,8 +222,14 @@ export default class SocketHandler {
 
       console.log('升级完成')
     } catch (error) {
-      ErrorLogger.logError('升级失败', error, { project: data.project, commandId })
+      ErrorLogger.logError('升级失败', error, { project: data.project, commandId, batchTaskId })
       this.agent.reportStatus('upgrade_failed')
+
+      // 报告批量任务失败状态
+      if (batchTaskId) {
+        this.reportBatchTaskStatus(batchTaskId, 'failed', error.message)
+      }
+
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
       }
@@ -218,6 +240,7 @@ export default class SocketHandler {
     console.log('执行降级命令:', data)
 
     const commandId = messageId || data?.commandId || null
+    const batchTaskId = data?.batchTaskId || null // 批量任务ID
 
     try {
       // 参数验证
@@ -232,6 +255,10 @@ export default class SocketHandler {
       }
 
       this.agent.reportStatus('rolling_back')
+      if (batchTaskId) {
+        this.reportBatchTaskStatus(batchTaskId, 'upgrading', null, 10)
+        this.reportBatchTaskProgress(batchTaskId, 30, 1, 2, '正在执行回滚...')
+      }
 
       // 执行回滚
       const rollbackResult = await this.agent.getDeployManager().rollback(project)
@@ -241,6 +268,9 @@ export default class SocketHandler {
       }
 
       this.agent.reportStatus('rollback_success')
+      if (batchTaskId) {
+        this.reportBatchTaskStatus(batchTaskId, 'success', null, 100)
+      }
 
       if (commandId) {
         this.sendCommandResult(commandId, true, '回滚成功', {
@@ -263,8 +293,14 @@ export default class SocketHandler {
 
       console.log('回滚完成')
     } catch (error) {
-      ErrorLogger.logError('回滚失败', error, { project: data.project, commandId })
+      ErrorLogger.logError('回滚失败', error, { project: data.project, commandId, batchTaskId })
       this.agent.reportStatus('rollback_failed')
+
+      // 报告批量任务失败状态
+      if (batchTaskId) {
+        this.reportBatchTaskStatus(batchTaskId, 'failed', error.message)
+      }
+
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
       }
@@ -431,6 +467,53 @@ export default class SocketHandler {
       }
     } catch (error) {
       ErrorLogger.logError('发送通知失败', error, { eventName })
+    }
+  }
+
+  /**
+   * 报告批量任务设备状态
+   */
+  reportBatchTaskStatus(batchTaskId, status, error = null, progress = null) {
+    if (!batchTaskId) return
+
+    try {
+      const statusData = {
+        taskId: batchTaskId,
+        deviceId: this.agent.config.device.id,
+        status,
+        error,
+        progress,
+        timestamp: new Date().toISOString()
+      }
+
+      this.socket.emit('batch:device_status', statusData)
+      console.log(`📊 批量任务状态报告: ${batchTaskId} - ${status}`)
+    } catch (error) {
+      ErrorLogger.logError('报告批量任务状态失败', error, { batchTaskId, status })
+    }
+  }
+
+  /**
+   * 报告批量任务设备进度
+   */
+  reportBatchTaskProgress(batchTaskId, progress, currentStep, totalSteps, message = '') {
+    if (!batchTaskId) return
+
+    try {
+      const progressData = {
+        taskId: batchTaskId,
+        deviceId: this.agent.config.device.id,
+        progress,
+        currentStep,
+        totalSteps,
+        message,
+        timestamp: new Date().toISOString()
+      }
+
+      this.socket.emit('batch:device_progress', progressData)
+      console.log(`🔄 批量任务进度报告: ${batchTaskId} - ${progress}% (${currentStep}/${totalSteps})`)
+    } catch (error) {
+      ErrorLogger.logError('报告批量任务进度失败', error, { batchTaskId, progress })
     }
   }
 

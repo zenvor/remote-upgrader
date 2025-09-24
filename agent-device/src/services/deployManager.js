@@ -2,6 +2,7 @@
 import fs from 'fs-extra'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import AdmZip from 'adm-zip'
 import { BackupHelper, DeployResult, ErrorLogger, FileHelper, VersionHelper } from '../utils/common.js'
 import { defaultPathValidator } from '../utils/pathValidator.js'
 
@@ -301,7 +302,7 @@ export default class DeployManager {
       if (ext === '.zip') {
         extractResult = await this.extractZip(packagePath, targetDir)
       } else if (ext === '.tar' || ext === '.tgz' || ext === '.gz') {
-        extractResult = await this.extractTar(packagePath, targetDir)
+        throw new Error(`不支持的压缩格式: ${ext}。仅支持 ZIP 格式，请重新打包为 ZIP 文件。`)
       } else {
         // 直接复制文件
         const fileName = path.basename(packagePath)
@@ -334,84 +335,65 @@ export default class DeployManager {
   }
 
   async extractZip(zipPath, targetDir) {
-    return new Promise((resolve, reject) => {
+    try {
       console.log(`🔧 准备解压ZIP文件:`)
       console.log(`  源文件: ${zipPath}`)
       console.log(`  目标目录: ${targetDir}`)
-      console.log(`  当前工作目录: ${process.cwd()}`)
-      console.log(`  运行用户: ${process.getuid ? process.getuid() : 'unknown'}`)
+      console.log(`  使用: adm-zip (跨平台)`)
 
-      // 使用系统的 unzip 命令
-      const unzip = spawn('unzip', ['-o', zipPath, '-d', targetDir], {
-        stdio: 'pipe',
-        timeout: this.constants.processTimeout
-      })
+      // 验证 ZIP 文件是否存在
+      if (!(await fs.pathExists(zipPath))) {
+        throw new Error(`ZIP 文件不存在: ${zipPath}`)
+      }
 
-      let stdout = ''
-      let stderr = ''
+      // 确保目标目录存在
+      await fs.ensureDir(targetDir)
 
-      unzip.stdout.on('data', (data) => {
-        stdout += data.toString()
-      })
+      // 创建 AdmZip 实例
+      const zip = new AdmZip(zipPath)
+      const zipEntries = zip.getEntries()
 
-      unzip.stderr.on('data', (data) => {
-        stderr += data.toString()
-      })
+      console.log(`📦 ZIP 文件包含 ${zipEntries.length} 个条目`)
 
-      unzip.on('close', (code) => {
-        console.log(`📊 unzip 命令执行完成，退出码: ${code}`)
-
-        // 只在出错时显示详细输出
-        if (code === 0) {
-          // 成功时只显示简洁信息
-          const fileCount = stdout.split('\n').filter((line) => line.includes('inflating:')).length
-          console.log(`✅ ZIP 解压成功，解压了 ${fileCount} 个文件`)
-          resolve(DeployResult.success('ZIP 解压完成'))
-        } else {
-          if (stdout) console.log(`📄 标准输出: ${stdout}`)
-          if (stderr) console.log(`📄 错误输出: ${stderr}`)
-          const error = new Error(`解压失败: ${stderr || 'Unknown error'}`)
-          ErrorLogger.logError('ZIP 解压', error, { code, zipPath, targetDir })
-          reject(error)
+      // 验证 ZIP 文件完整性
+      let hasValidEntries = false
+      for (const entry of zipEntries) {
+        if (!entry.isDirectory && entry.getData().length > 0) {
+          hasValidEntries = true
+          break
         }
-      })
+      }
 
-      unzip.on('error', (error) => {
-        reject(error)
-      })
-    })
+      if (!hasValidEntries) {
+        throw new Error('ZIP 文件为空或损坏')
+      }
+
+      // 解压文件
+      console.log(`📂 开始解压到目标目录...`)
+      zip.extractAllTo(targetDir, true)
+
+      // 验证解压结果
+      const extractedFiles = await fs.readdir(targetDir)
+      const fileCount = extractedFiles.length
+
+      if (fileCount === 0) {
+        throw new Error('解压完成但目标目录为空')
+      }
+
+      console.log(`✅ ZIP 解压成功，解压了 ${fileCount} 个文件/目录`)
+
+      // 显示解压的主要文件
+      const displayFiles = extractedFiles.slice(0, 5)
+      console.log(`📋 主要文件: ${displayFiles.join(', ')}${fileCount > 5 ? ' ...' : ''}`)
+
+      return DeployResult.success('ZIP 解压完成')
+    } catch (error) {
+      console.error(`❌ ZIP 解压失败: ${error.message}`)
+      ErrorLogger.logError('ZIP 解压', error, { zipPath, targetDir })
+      return DeployResult.error(error)
+    }
   }
 
-  async extractTar(tarPath, targetDir) {
-    return new Promise((resolve, reject) => {
-      // 使用系统的 tar 命令
-      const tar = spawn('tar', ['-xf', tarPath, '-C', targetDir], {
-        stdio: 'pipe',
-        timeout: this.constants.processTimeout
-      })
-
-      let stderr = ''
-
-      tar.stderr.on('data', (data) => {
-        stderr += data.toString()
-      })
-
-      tar.on('close', (code) => {
-        if (code === 0) {
-          console.log('TAR 解压成功')
-          resolve(DeployResult.success('TAR 解压完成'))
-        } else {
-          const error = new Error(`解压失败: ${stderr}`)
-          ErrorLogger.logError('TAR 解压', error, { code, tarPath, targetDir })
-          reject(error)
-        }
-      })
-
-      tar.on('error', (error) => {
-        reject(error)
-      })
-    })
-  }
 
   async updateVersionInfo(project, version, packagePath, targetDirOverride = null) {
     // 参数验证
@@ -633,8 +615,6 @@ export default class DeployManager {
   async systemForceDelete(targetDir, fileList) {
     console.log(`🔧 方法3：使用系统命令强制删除...`)
 
-    const { spawn } = await import('node:child_process')
-
     return new Promise((resolve, reject) => {
       // 使用 rm -rf 强制删除所有内容
       const rm = spawn('rm', ['-rf', ...fileList.map((f) => path.join(targetDir, f))], {
@@ -679,8 +659,6 @@ export default class DeployManager {
    */
   async windowsForceDelete(targetDir, fileList) {
     console.log(`🔧 方法3：使用 PowerShell 强制删除...`)
-
-    const { spawn } = await import('node:child_process')
 
     return new Promise((resolve, reject) => {
       // 构建 PowerShell 删除命令

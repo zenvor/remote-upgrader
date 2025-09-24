@@ -41,9 +41,16 @@
 
       <!-- 升级配置 -->
       <a-card title="升级配置" size="small" :bordered="false" class="info-card">
-        <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
-          <a-form-item label="项目类型">
-            <a-radio-group v-model:value="formData.project">
+        <a-form ref="upgradeFormRef" :model="formData" :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+          <a-form-item
+            label="项目类型"
+            name="project"
+            :rules="[{ required: true, message: '请选择项目类型', trigger: 'change' }]"
+          >
+            <a-radio-group
+              v-model:value="formData.project"
+              :rules="[{ required: true, message: '请选择项目类型', trigger: 'change' }]"
+            >
               <a-radio-button v-for="project in projectOptions" :key="project.value" :value="project.value">
                 <component :is="project.icon" style="margin-right: 4px" />
                 {{ project.label }}
@@ -51,7 +58,12 @@
             </a-radio-group>
           </a-form-item>
 
-          <a-form-item v-if="formData.project" label="升级包">
+          <a-form-item
+            v-if="formData.project"
+            label="升级包"
+            name="packageName"
+            :rules="[{ required: true, message: '请选择升级包', trigger: 'change' }]"
+          >
             <a-select
               v-model:value="formData.packageName"
               :options="
@@ -67,7 +79,7 @@
             />
           </a-form-item>
 
-          <a-form-item v-if="formData.packageName" label="部署路径">
+          <a-form-item v-if="formData.packageName" label="部署路径" name="deployPath">
             <a-input v-model:value="formData.deployPath" placeholder="例如：/opt/frontend 或 /opt/backend" />
           </a-form-item>
         </a-form>
@@ -88,28 +100,6 @@
         </div>
       </a-card>
 
-      <!-- 预检查结果 -->
-      <a-card v-if="preCheckResult" title="预检查结果" size="small" :bordered="false" class="info-card">
-        <a-alert
-          :type="preCheckResult.success ? 'success' : 'warning'"
-          :message="preCheckResult.success ? '预检查通过' : '发现问题'"
-          show-icon
-        >
-          <template #description>
-            <div v-for="(message, index) in preCheckResult.messages" :key="index">
-              {{ message }}
-            </div>
-          </template>
-        </a-alert>
-      </a-card>
-
-      <!-- 预检查按钮 -->
-      <div
-        v-if="formData.project && formData.packageName && !preCheckResult"
-        style="text-align: center; margin-top: 16px"
-      >
-        <a-button :loading="preChecking" @click="runPreCheck"> 预检查 </a-button>
-      </div>
     </div>
   </a-modal>
 </template>
@@ -145,6 +135,9 @@ const formData = ref({
     restartAfterUpgrade: false
   }
 })
+
+// 升级表单引用
+const upgradeFormRef = ref(null)
 
 // 升级设备
 const upgradeDevice = async (device, project, packageInfo = null, options = {}) => {
@@ -204,8 +197,6 @@ const fetchPackages = async () => {
 // 本地状态（加载/校验）
 const loadingPackages = ref(false)
 const upgrading = ref(false)
-const preChecking = ref(false)
-const preCheckResult = ref(null)
 
 const resolveStoredDeployPath = (project) => {
   if (!project || targetDevices.value.length === 0) return null
@@ -269,10 +260,6 @@ const selectedPackageInfo = computed(() => {
   return availablePackages.value.find((pkg) => pkg.id === formData.value.packageName)
 })
 
-const canUpgrade = computed(() => {
-  return formData.value?.project && formData.value?.packageName && targetDevices.value.length > 0 && !upgrading.value
-})
-
 // 设备状态统计
 const deviceStatusSummary = computed(() => {
   const statusCount = {}
@@ -292,26 +279,22 @@ const deviceStatusSummary = computed(() => {
 watch(
   () => formData.value?.project,
   (newProject) => {
+    console.log('newProject: ', newProject)
     if (!formData.value) return
     formData.value.packageName = null
-    preCheckResult.value = null
-    if (!newProject) {
-      formData.value.deployPath = ''
-      return
-    }
     const storedPath = resolveStoredDeployPath(newProject)
     // 为不同项目设置默认路径，优先使用已记录的部署路径
     formData.value.deployPath = storedPath || null
   }
 )
 
+// 监听目标设备变化，清空包选择并设置默认部署路径
 watch(
   () => targetDevices.value,
   (devices) => {
     if (!devices || devices.length === 0 || !formData.value?.project) {
       return
     }
-    preCheckResult.value = null
     formData.value.packageName = null
     const storedPath = resolveStoredDeployPath(formData.value.project)
     if (storedPath) {
@@ -323,12 +306,6 @@ watch(
   { deep: true }
 )
 
-watch(
-  () => formData.value?.deployPath,
-  () => {
-    preCheckResult.value = null
-  }
-)
 
 // 重置表单到初始状态
 const resetForm = () => {
@@ -351,9 +328,7 @@ watch(
     if (visible) {
       // 重置表单和状态
       resetForm()
-      preCheckResult.value = null
       upgrading.value = false
-      preChecking.value = false
 
       loadingPackages.value = true
       try {
@@ -369,56 +344,13 @@ watch(
 )
 
 // 方法
-const runPreCheck = async () => {
-  if (!selectedPackageInfo.value || targetDevices.value.length === 0) return
-
-  preChecking.value = true
-  try {
-    // 模拟预检查
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-
-    const messages = []
-    let success = true
-
-    // 检查设备状态
-    const offlineDevices = targetDevices.value.filter((d) => d.status !== 'online')
-    if (offlineDevices.length > 0) {
-      messages.push(`${offlineDevices.length} 个设备离线，无法升级`)
-      success = false
-    }
-
-    // 检查磁盘空间（模拟）
-    const needSpace = selectedPackageInfo.value.fileSize * 2 // 需要2倍空间用于备份
-    messages.push(`升级包大小: ${formatFileSize(selectedPackageInfo.value.fileSize)}`)
-    messages.push(`预计需要磁盘空间: ${formatFileSize(needSpace)}`)
-
-    // 检查版本兼容性（模拟）
-    if (Math.random() > 0.8) {
-      messages.push('警告: 检测到版本兼容性问题，建议谨慎升级')
-      success = false
-    } else {
-      messages.push('版本兼容性检查通过')
-    }
-
-    preCheckResult.value = {
-      success,
-      messages
-    }
-  } catch (error) {
-    console.error('预检查失败:', error)
-    toast.error('预检查失败', '错误')
-    preCheckResult.value = {
-      success: false,
-      messages: ['预检查失败，请重试']
-    }
-  } finally {
-    preChecking.value = false
-  }
-}
-
 /** 提交升级（与 @ok 绑定） */
 const handleSubmit = async () => {
-  if (!canUpgrade.value) return
+  try {
+    await upgradeFormRef.value.validate()
+  } catch (error) {
+    return console.error('表单校验失败:', error)
+  }
 
   upgrading.value = true
   try {
@@ -455,6 +387,7 @@ const handleSubmit = async () => {
 /** 取消并关闭弹窗 */
 const cancel = () => {
   open.value = false
+  upgradeFormRef.value?.resetFields()
 }
 
 // 工具方法

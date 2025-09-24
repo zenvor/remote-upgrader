@@ -2,43 +2,10 @@ import fs from 'fs-extra'
 import path from 'node:path'
 import readline from 'node:readline'
 
-const rootDir = process.cwd()
-
-const dirsToClean = [
-  { label: '上传包目录', target: path.join(rootDir, 'uploads') },
-  { label: '日志目录', target: path.join(rootDir, 'logs') }
-]
-
-const filesToReset = [
-  {
-    label: '设备配置文件',
-    target: path.join(rootDir, 'config/devices.json'),
-    defaultContent: {
-      devices: {},
-      settings: {
-        heartbeatTimeout: 60_000,
-        maxUpgradeHistory: 10,
-        offlineCleanupDays: 7
-      },
-      statistics: {
-        totalDevices: 0,
-        onlineDevices: 0,
-        totalConnections: 0,
-        lastUpdated: null
-      }
-    }
-  },
-  {
-    label: '包配置文件',
-    target: path.join(rootDir, 'config/packages.json'),
-    defaultContent: {
-      packages: {
-        frontend: { packages: {} },
-        backend: { packages: {} }
-      },
-      lastSyncedAt: null
-    }
-  }
+const pathsToClean = [
+  { label: '配置目录', target: path.resolve('config') },
+  { label: '上传包目录', target: path.resolve('uploads') },
+  { label: '日志目录', target: path.resolve('logs') }
 ]
 
 const rl = readline.createInterface({
@@ -47,13 +14,9 @@ const rl = readline.createInterface({
 })
 
 console.log('⚠️  该操作将重置服务端配置，使其适合在新环境重新部署。')
-console.log('将要清理以下目录/文件:')
-for (const item of dirsToClean) {
+console.log('将要清理以下目录:')
+for (const item of pathsToClean) {
   console.log(` - ${item.label}: ${item.target}`)
-}
-
-for (const file of filesToReset) {
-  console.log(` - ${file.label}: ${file.target}`)
 }
 
 const ask = (q) => new Promise((resolve) => rl.question(q, (ans) => resolve(ans.trim().toLowerCase())))
@@ -67,29 +30,28 @@ const ask = (q) => new Promise((resolve) => rl.question(q, (ans) => resolve(ans.
     return
   }
 
+  let successCount = 0
+
   // 顺序处理目录清理，避免并发删除冲突
-  for (const dir of dirsToClean) {
+  for (const item of pathsToClean) {
     try {
       // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
-      await fs.remove(dir.target)
-      console.log(`✅ 已清理 ${dir.label}`)
+      await fs.remove(item.target)
+      successCount++
+      console.log(`✅ 已清理 ${item.label}`)
     } catch (error) {
-      console.warn(`⚠️ 无法清理 ${dir.label}: ${error.message}`)
+      console.warn(`⚠️ 无法清理 ${item.label}: ${error.message}`)
     }
   }
 
-  // 顺序处理文件重置，确保依赖关系正确
-  for (const file of filesToReset) {
-    try {
-      // eslint-disable-next-line no-await-in-loop -- 顺序处理确保依赖关系
-      await fs.ensureDir(path.dirname(file.target))
-      // eslint-disable-next-line no-await-in-loop -- 顺序处理确保依赖关系
-      await fs.writeJson(file.target, file.defaultContent, { spaces: 2 })
-      console.log(`✅ 已重置 ${file.label}`)
-    } catch (error) {
-      console.warn(`⚠️ 无法重置 ${file.label}: ${error.message}`)
-    }
+  // 重新创建配置目录，方便后续写入
+  try {
+    await fs.ensureDir(path.resolve('config'))
+    console.log('✅ 已重新创建 config 目录')
+  } catch (error) {
+    console.warn(`⚠️ 无法重建 config 目录: ${error.message}`)
   }
 
-  console.log('服务端配置重置完成。')
+  console.log(`重置完成，共清理 ${successCount} 个项目。`)
+  console.log('服务启动时将自动生成默认配置文件。')
 })()

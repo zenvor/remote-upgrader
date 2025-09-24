@@ -7,7 +7,9 @@ import App from './App.vue'
 const routes = [
   { path: '/', redirect: '/packages' },
   { path: '/devices', component: () => import('./views/devices/DevicesView.vue') },
-  { path: '/packages', component: () => import('./views/packages/PackagesView.vue') }
+  { path: '/packages', component: () => import('./views/packages/PackagesView.vue') },
+  { path: '/batch-tasks', component: () => import('./views/batch-tasks/BatchTaskView.vue') },
+  { path: '/batch-tasks/create', component: () => import('./views/batch-tasks/CreateView.vue') }
 ]
 
 const router = createRouter({

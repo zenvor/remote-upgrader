@@ -14,8 +14,10 @@ import serve from 'koa-static'
 import { koaSwagger } from 'koa2-swagger-ui'
 import { Server } from 'socket.io'
 import swaggerSpec from './config/swagger.js'
+import { initializeBatchTaskManager } from './controllers/batchController.js'
 import { setupSocketHandlers } from './controllers/socketController.js'
 import createTimeFormatter from './middleware/timeFormatter.js'
+import batchRouter from './routes/batch.js'
 import deviceRouter from './routes/devices.js'
 import docsRouter from './routes/docs.js'
 import packageRouter from './routes/packages.js'
@@ -165,6 +167,7 @@ app.use(uploadRouter.routes())
 app.use(packageRouter.routes())
 app.use(deviceRouter.routes())
 app.use(versionRouter.routes())
+app.use(batchRouter.routes())
 
 // Socket.IO 连接处理
 setupSocketHandlers(io)
@@ -199,6 +202,9 @@ async function ensureDirectories() {
 export async function start() {
   await ensureDirectories()
 
+  // 初始化批量任务管理器
+  await initializeBatchTaskManager()
+
   const port = Number.parseInt(process.env.PORT) || constants.defaultPort
   const host = process.env.HOST || constants.defaultHost
 
@@ -222,9 +228,14 @@ export async function start() {
   })
 }
 
-// 中文注释：ESM 环境的 main 检测
-const isMain = process.argv[1] === fileURLToPath(import.meta.url)
-if (isMain) {
+// 中文注释：ESM 环境的 main 检测（兼容 PM2）
+const argvPath = process.argv[1] && path.resolve(process.argv[1])
+const isMain = argvPath && argvPath === fileURLToPath(import.meta.url)
+
+// PM2 下也视为主进程
+const isPm2 = !!process.env.pm_id
+
+if (isMain || isPm2) {
   start().catch(console.error)
 }
 

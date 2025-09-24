@@ -7,7 +7,7 @@
     <PackageUploadCard @upload-success="refreshPackages" />
 
     <!-- 包列表 -->
-    <a-card :bordered="false" size="small" class="info-card" :body-style="{ padding: '0 20px' }">
+    <a-card :bordered="false" size="small" class="info-card" :body-style="{ padding: '0 20px 20px' }">
       <OperationBar
         :title="'包管理'"
         size="small"
@@ -38,18 +38,15 @@
     </a-card>
 
     <!-- 包详情对话框组件 -->
-    <PackageDetailModal
-      v-model:open="packageDetailVisible"
-      :selected-package="selectedPackage"
-    />
+    <PackageDetailModal v-model:open="packageDetailVisible" :selected-package="selectedPackage" />
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import OperationBar from '@/components/OperationBar.vue'
 import { packageApi } from '@/api'
+import OperationBar from '@/components/OperationBar.vue'
 import toast from '@/utils/toast'
+import { computed, ref } from 'vue'
 import PackageDetailModal from './components/PackageDetailModal.vue'
 import PackageStatsCards from './components/PackageStatsCards.vue'
 import PackageTable from './components/PackageTable.vue'

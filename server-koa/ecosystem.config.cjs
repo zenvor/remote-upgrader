@@ -8,9 +8,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
+      exp_backoff_restart_delay: 2000, // 指数退避重启
+      kill_timeout: 5000, // 优雅关闭超时
       env: {
         NODE_ENV: 'development',
-        PORT: 3000
+        PORT: 9005
       },
       env_production: {
         NODE_ENV: 'production',
