@@ -67,18 +67,16 @@ export function setupSocketHandlers(io) {
       const { deviceId } = data
       if (deviceId && typeof deviceId === 'string') {
         // 可选网络刷新（接受顶层上报）
-        const { wifiName, wifiSignal, publicIp, localIp, macAddresses } = data || {}
+        const { wifiName, wifiSignal, localIp, macAddresses } = data || {}
         if (
           wifiName !== undefined ||
           wifiSignal !== undefined ||
-          publicIp !== undefined ||
           localIp !== undefined ||
           Array.isArray(macAddresses)
         ) {
           deviceManager.updateNetworkInfo(deviceId, {
             wifiName,
             wifiSignal,
-            publicIp,
             localIp,
             macAddresses
           })
@@ -87,14 +85,12 @@ export function setupSocketHandlers(io) {
         }
 
         // 可选系统/健康轻量信息（按分组）
-        if (data.health || data.system || data.agent || data.storage || data.deploy) {
+        if (data.health || data.system || data.agent || data.deploy) {
           const payload = {
             agentVersion: data.agent?.agentVersion,
             osVersion: data.system?.osVersion,
             arch: data.system?.arch,
             uptimeSeconds: data.health?.uptimeSeconds,
-            diskFreeBytes: data.storage?.diskFreeBytes,
-            writable: data.storage?.writable,
             rollbackAvailable: data.deploy?.rollbackAvailable
           }
           deviceManager.updateSystemInfo(deviceId, payload)
@@ -148,8 +144,6 @@ export function setupSocketHandlers(io) {
             osVersion: data.system?.osVersion,
             arch: data.system?.arch,
             uptimeSeconds: data.health?.uptimeSeconds,
-            diskFreeBytes: data.storage?.diskFreeBytes,
-            writable: data.storage?.writable,
             rollbackAvailable: data.deploy?.rollbackAvailable
           }
           deviceManager.updateSystemInfo(deviceId, payload)

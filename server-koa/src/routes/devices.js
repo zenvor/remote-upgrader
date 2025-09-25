@@ -98,10 +98,6 @@ const router = new Router({
  *                             type: number
  *                             nullable: true
  *                             description: WiFi信号强度
- *                           publicIp:
- *                             type: string
- *                             nullable: true
- *                             description: 公网IP
  *                           localIp:
  *                             type: string
  *                             nullable: true
@@ -264,7 +260,6 @@ const router = new Router({
  *                   # 网络信息（扁平化）
  *                   wifiName: "Office-WiFi"
  *                   wifiSignal: -45
- *                   publicIp: "203.0.113.1"
  *                   localIp: "192.168.1.100"
  *                   macAddresses: ["aa:bb:cc:dd:ee:ff"]
  *                   # 版本信息（扁平化）
@@ -311,7 +306,6 @@ const router = new Router({
  *                   # 网络信息（扁平化）
  *                   wifiName: null
  *                   wifiSignal: null
- *                   publicIp: null
  *                   localIp: null
  *                   macAddresses: []
  *                   # 版本信息（扁平化）

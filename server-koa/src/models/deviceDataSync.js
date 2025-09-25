@@ -37,7 +37,7 @@ export class DeviceDataSync {
       this.markForSync(deviceId, 'network', networkInfo)
 
       console.log(
-        `🌐 设备网络信息更新: ${deviceId} - WiFi: ${networkInfo.wifiName || '未连接'}, 公网IP: ${networkInfo.publicIp || '未知'}`
+        `🌐 设备网络信息更新: ${deviceId} - WiFi: ${networkInfo.wifiName || '未连接'}, 本地IP: ${networkInfo.localIp || '未知'}`
       )
       return true
     } catch (error) {

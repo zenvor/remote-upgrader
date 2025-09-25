@@ -71,14 +71,12 @@ class DeviceManager {
       deviceName,
       wifiName,
       wifiSignal,
-      publicIp,
       localIp,
       macAddresses,
       // 分组字段（优先）
       system = {},
       agent = {},
       network = {},
-      storage = {},
       deploy = {},
       health = {}
     } = deviceInfo
@@ -119,16 +117,11 @@ class DeviceManager {
         network: {
           wifiName: network.wifiName ?? existingInfo?.network?.wifiName ?? null,
           wifiSignal: network.wifiSignal ?? existingInfo?.network?.wifiSignal ?? null,
-          publicIp: network.publicIp ?? existingInfo?.network?.publicIp ?? null,
           localIp: network.localIp ?? existingInfo?.network?.localIp ?? null,
           macAddresses: Array.isArray(network.macAddresses)
             ? network.macAddresses
             : existingInfo?.network?.macAddresses || [],
           lastKnownIp: existingInfo?.network?.lastKnownIp ?? null
-        },
-        storage: {
-          diskFreeBytes: storage.diskFreeBytes ?? existingInfo?.storage?.diskFreeBytes ?? null,
-          writable: typeof storage.writable === 'boolean' ? storage.writable : (existingInfo?.storage?.writable ?? null)
         },
         deploy: {
           rollbackAvailable:
@@ -162,7 +155,6 @@ class DeviceManager {
     this._saveDeviceInfoAndConnectionAsync(deviceId, device.info, {
       wifiName: network.wifiName || wifiName,
       wifiSignal: network.wifiSignal || wifiSignal,
-      publicIp: network.publicIp || publicIp,
       localIp: network.localIp || localIp,
       macAddresses: network.macAddresses || macAddresses
     })
@@ -222,13 +214,8 @@ class DeviceManager {
           network: {
             wifiName: device.info.network?.wifiName ?? null,
             wifiSignal: device.info.network?.wifiSignal ?? null,
-            publicIp: device.info.network?.publicIp ?? null,
             localIp: device.info.network?.localIp ?? null,
             macAddresses: device.info.network?.macAddresses ?? []
-          },
-          storage: {
-            diskFreeBytes: device.info.storage?.diskFreeBytes ?? null,
-            writable: typeof device.info.storage?.writable === 'boolean' ? device.info.storage?.writable : null
           },
           health: {
             uptimeSeconds: device.info.health?.uptimeSeconds ?? null
@@ -269,13 +256,8 @@ class DeviceManager {
         network: {
           wifiName: device.info.network?.wifiName ?? null,
           wifiSignal: device.info.network?.wifiSignal ?? null,
-          publicIp: device.info.network?.publicIp ?? null,
           localIp: device.info.network?.localIp ?? null,
           macAddresses: device.info.network?.macAddresses ?? []
-        },
-        storage: {
-          diskFreeBytes: device.info.storage?.diskFreeBytes ?? null,
-          writable: typeof device.info.storage?.writable === 'boolean' ? device.info.storage?.writable : null
         },
         health: {
           uptimeSeconds: device.info.health?.uptimeSeconds ?? null
@@ -296,25 +278,19 @@ class DeviceManager {
   updateNetworkInfo(deviceId, network) {
     const device = this.devices.get(deviceId)
     if (device) {
-      const { wifiName, wifiSignal, publicIp, localIp, macAddresses } = network
+      const { wifiName, wifiSignal, localIp, macAddresses } = network
       device.info.network = device.info.network || {}
       if (wifiName !== undefined) device.info.network.wifiName = wifiName
       if (wifiSignal !== undefined) device.info.network.wifiSignal = wifiSignal
-      if (publicIp !== undefined) {
-        device.info.network.publicIp = publicIp
-        // 更新 lastKnownIp
-        device.info.network.lastKnownIp = publicIp
-      }
 
       if (localIp !== undefined) device.info.network.localIp = localIp || device.info.network.localIp || null
       if (Array.isArray(macAddresses)) device.info.network.macAddresses = macAddresses
       device.lastHeartbeat = new Date()
-      console.log(`设备网络信息更新: ${deviceId} - WiFi: ${wifiName || '无'}, 公网IP: ${publicIp || '未知'}`)
+      console.log(`设备网络信息更新: ${deviceId} - WiFi: ${wifiName || '无'}, 本地IP: ${localIp || '未知'}`)
       // 将网络信息同步到持久化存储
       this._updateHeartbeatAsync(deviceId, {
         wifiName,
         wifiSignal,
-        publicIp,
         localIp,
         macAddresses
       })
@@ -322,13 +298,13 @@ class DeviceManager {
   }
 
   /**
-   * 更新设备系统信息（agentVersion、osVersion、arch、uptimeSeconds、diskFreeBytes、writable、rollbackAvailable 等）
+   * 更新设备系统信息（agentVersion、osVersion、arch、uptimeSeconds、rollbackAvailable 等）
    */
   updateSystemInfo(deviceId, systemInfo = {}) {
     const device = this.devices.get(deviceId)
     if (!device) return
     // 更新分组字段为主
-    const { agentVersion, osVersion, arch, uptimeSeconds, diskFreeBytes, writable, rollbackAvailable } = systemInfo
+    const { agentVersion, osVersion, arch, uptimeSeconds, rollbackAvailable } = systemInfo
 
     device.info.system = device.info.system || {}
     if (osVersion !== undefined) device.info.system.osVersion = osVersion
@@ -340,9 +316,6 @@ class DeviceManager {
     device.info.agent = device.info.agent || {}
     if (agentVersion !== undefined) device.info.agent.agentVersion = agentVersion
 
-    device.info.storage = device.info.storage || {}
-    if (diskFreeBytes !== undefined) device.info.storage.diskFreeBytes = diskFreeBytes
-    if (writable !== undefined) device.info.storage.writable = writable
 
     device.info.deploy = device.info.deploy || {}
     if (rollbackAvailable !== undefined) device.info.deploy.rollbackAvailable = rollbackAvailable
@@ -353,15 +326,12 @@ class DeviceManager {
     const toSave = {
       system: {},
       agent: {},
-      storage: {},
       deploy: {},
       health: {}
     }
     if (osVersion !== undefined) toSave.system.osVersion = osVersion
     if (arch !== undefined) toSave.system.arch = arch
     if (agentVersion !== undefined) toSave.agent.agentVersion = agentVersion
-    if (diskFreeBytes !== undefined) toSave.storage.diskFreeBytes = diskFreeBytes
-    if (writable !== undefined) toSave.storage.writable = writable
     if (rollbackAvailable !== undefined) toSave.deploy.rollbackAvailable = rollbackAvailable
     if (uptimeSeconds !== undefined) toSave.health.uptimeSeconds = uptimeSeconds
     device.lastHeartbeat = new Date()

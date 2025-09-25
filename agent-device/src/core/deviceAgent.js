@@ -23,7 +23,6 @@ export default class DeviceAgent {
       maxReconnectDelay: 300_000, // 5分钟
       jitterRange: 1000, // 重连抖动范围 1秒
       wifiTimeout: 3000, // WiFi信息获取超时
-      publicIpTimeout: 5000, // 公网IP获取超时
       statusSendDelay: 100, // 状态发送延迟
       networkUpdateTimeout: 30_000 // 网络信息更新超时
     }
@@ -42,15 +41,6 @@ export default class DeviceAgent {
     // 并发控制
     this.registerPromise = null // 注册操作的Promise
     this.networkUpdatePromise = null // 网络信息更新的Promise
-
-    // 公网IP服务配置
-    this.publicIpServices = [
-      'https://api.ipify.org/?format=text',
-      'https://ipinfo.io/ip',
-      'https://api.myip.com',
-      'https://httpbin.org/ip',
-      'https://icanhazip.com'
-    ]
   }
 
   validateConfig(config) {
@@ -291,7 +281,6 @@ export default class DeviceAgent {
         network: {
           wifiName: null,
           wifiSignal: null,
-          publicIp: null,
           localIp: null,
           macAddresses: []
         },
@@ -342,10 +331,9 @@ export default class DeviceAgent {
 
   async _doUpdateNetworkInfo() {
     try {
-      // 并行获取WiFi、公网IP、本地地址和MAC（带超时保护）
+      // 并行获取WiFi、本地地址和MAC（带超时保护）
       const networkInfoPromise = Promise.all([
         this.getWifiInfo(),
-        this.getPublicIp(),
         this.getLocalIp(),
         this.getMacAddresses()
       ])
@@ -359,7 +347,7 @@ export default class DeviceAgent {
       })
 
       try {
-        const [wifiInfo, publicIp, localIp, macAddresses] = await Promise.race([networkInfoPromise, timeoutPromise])
+        const [wifiInfo, localIp, macAddresses] = await Promise.race([networkInfoPromise, timeoutPromise])
 
         // 清理超时定时器
         if (timeoutId) {
@@ -373,7 +361,6 @@ export default class DeviceAgent {
             network: {
               wifiName: wifiInfo?.ssid || null,
               wifiSignal: wifiInfo?.signal || null,
-              publicIp,
               localIp,
               macAddresses
             },
@@ -382,7 +369,6 @@ export default class DeviceAgent {
 
           console.log('🌐 更新网络信息:', {
             wifi: wifiInfo?.ssid || '无WiFi连接',
-            publicIp: publicIp || '获取失败',
             localIp: localIp || '未知',
             macCount: Array.isArray(macAddresses) ? macAddresses.length : 0
           })
@@ -645,130 +631,24 @@ export default class DeviceAgent {
     return deviceName
   }
 
-  /**
-   * 获取公网IP地址
-   */
-  async getPublicIp() {
-    // 并行尝试所有IP服务，提高成功率
-    const promises = this.publicIpServices.map(async (serviceUrl) => {
-      let timeoutId = null
-      try {
-        console.log(`🌍 尝试从 ${serviceUrl} 获取公网IP...`)
-
-        const controller = new AbortController()
-        timeoutId = setTimeout(() => controller.abort(), this.constants.publicIpTimeout)
-
-        const response = await fetch(serviceUrl, {
-          method: 'GET',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'RemoteUpgrader-Device/1.0'
-          }
-        })
-
-        clearTimeout(timeoutId)
-        timeoutId = null
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-
-        const text = await response.text()
-        const ip = this.parseIpResponse(serviceUrl, text)
-
-        // 验证IP格式
-        if (this.isValidIp(ip)) {
-          console.log('🌍 获取到公网IP:', ip)
-          return ip
-        }
-        throw new Error('无效的IP格式')
-      } catch (error) {
-        if (timeoutId) {
-          clearTimeout(timeoutId)
-        }
-        console.error(`⚠️ 从 ${serviceUrl} 获取公网IP失败:`, error.message)
-        throw error
-      }
-    })
-
-    // 等待第一个成功的响应
-    try {
-      const result = await Promise.any(promises)
-      return result
-    } catch {
-      console.log('❌ 所有公网IP服务都无法访问')
-      return null
-    }
-  }
-
-  /**
-   * 解析不同服务的IP响应格式
-   */
-  parseIpResponse(serviceUrl, text) {
-    try {
-      // 处理不同服务的响应格式
-      if (serviceUrl.includes('myip.com')) {
-        const data = JSON.parse(text)
-        return data.ip
-      } else if (serviceUrl.includes('httpbin.org')) {
-        const data = JSON.parse(text)
-        return data.origin
-      } else {
-        // Ipify.org, ipinfo.io, icanhazip.com 直接返回IP
-        return text.trim()
-      }
-    } catch (error) {
-      console.error(`⚠️ 解析IP响应失败: ${serviceUrl}`, error.message)
-      return null
-    }
-  }
-
-  /**
-   * 验证IP地址格式
-   */
-  isValidIp(ip) {
-    if (!ip || typeof ip !== 'string') return false
-
-    // IPv4正则表达式
-    const ipv4Regex = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})$/
-
-    // IPv6正则表达式（简化版）
-    const ipv6Regex = /^(?:[\da-fA-F]{1,4}:){7}[\da-fA-F]{1,4}$/
-
-    return ipv4Regex.test(ip.trim()) || ipv6Regex.test(ip.trim())
-  }
 
   /**
    * 获取当前连接的WiFi信息（带超时处理和多种策略）
    */
   async getWifiInfo() {
     try {
-      // 策略1：尝试使用 systeminformation 获取
-      const siResult = await this.getWifiInfoFromSystemInformation()
-
-      // 如果获取到有效的 WiFi 名称（非 <redacted>），直接返回
-      if (siResult && siResult.ssid && !siResult.ssid.includes('redacted')) {
-        console.log('✅ 通过 systeminformation 获取到 WiFi 信息:', siResult.ssid)
-        return siResult
-      }
-
-      // 策略2：如果是 <redacted>，尝试原生系统命令
-      console.log('⚠️ systeminformation 返回 redacted，尝试原生命令获取 WiFi 信息')
+      // 直接使用原生系统命令获取 WiFi 信息
+      console.log('🔍 使用原生命令获取 WiFi 信息')
       const nativeResult = await this.getWifiInfoFromNativeCommand()
 
       if (nativeResult && nativeResult.ssid) {
         console.log('✅ 通过原生命令获取到 WiFi 信息:', nativeResult.ssid)
-        // 合并信号强度信息（如果有）
-        return {
-          ssid: nativeResult.ssid,
-          signal: siResult?.signal || nativeResult.signal || null,
-          frequency: siResult?.frequency || nativeResult.frequency || null,
-          type: siResult?.type || nativeResult.type || null
-        }
+        return nativeResult
       }
 
-      // 如果两种方法都失败，返回 systeminformation 的结果（可能包含信号强度等其他信息）
-      return siResult || {
+      // 如果获取失败，返回空结果
+      console.log('⚠️ 未获取到 WiFi 信息')
+      return {
         ssid: null,
         signal: null,
         frequency: null,
@@ -785,36 +665,6 @@ export default class DeviceAgent {
     }
   }
 
-  /**
-   * 通过 systeminformation 获取 WiFi 信息
-   */
-  async getWifiInfoFromSystemInformation() {
-    try {
-      const wifiPromise = si.wifiConnections()
-      const timeoutPromise = new Promise((_resolve, reject) => {
-        setTimeout(() => reject(new Error('WiFi info timeout')), this.constants.wifiTimeout)
-      })
-
-      const wifiConnections = await Promise.race([wifiPromise, timeoutPromise])
-
-      if (wifiConnections && wifiConnections.length > 0) {
-        // 找到当前活动的WiFi连接
-        const activeWifi = wifiConnections.find((wifi) => wifi.active) || wifiConnections[0]
-
-        return {
-          ssid: activeWifi.ssid || null,
-          signal: activeWifi.signalLevel || null,
-          frequency: activeWifi.frequency || null,
-          type: activeWifi.type || null
-        }
-      }
-
-      return null
-    } catch (error) {
-      console.error('⚠️ systeminformation 获取WiFi信息失败:', error.message)
-      return null
-    }
-  }
 
   /**
    * 通过原生系统命令获取 WiFi 信息
@@ -945,25 +795,29 @@ export default class DeviceAgent {
     try {
       const { execSync } = await import('child_process')
 
-      // 使用 netsh 命令获取当前连接的 WiFi 信息
-      // 获取配置文件列表（暂时不使用，但保留用于未来扩展）
-      execSync('netsh wlan show profiles', {
-        encoding: 'utf8',
-        timeout: this.constants.wifiTimeout
-      })
-
-      // 解析活动连接
+      // 直接获取当前活动的WiFi接口信息
       const interfaceResult = execSync('netsh wlan show interfaces', {
         encoding: 'utf8',
         timeout: this.constants.wifiTimeout
       })
 
+      console.log('🔍 Windows netsh 输出:', interfaceResult.substring(0, 200) + '...')
+
+      // 检查是否有WiFi适配器连接
+      if (!interfaceResult.includes('SSID') || interfaceResult.includes('There is no profile assigned')) {
+        console.log('⚠️ Windows WiFi: 未检测到WiFi连接或适配器')
+        return null
+      }
+
       const ssidMatch = interfaceResult.match(/\s*SSID\s*:\s*(.+)/)
       const ssid = ssidMatch ? ssidMatch[1].trim() : null
 
-      if (!ssid) {
+      if (!ssid || ssid === '') {
+        console.log('⚠️ Windows WiFi: SSID为空或未找到')
         return null
       }
+
+      console.log('✅ Windows WiFi: 成功获取SSID:', ssid)
 
       // 尝试获取信号强度
       let signal = null
@@ -973,6 +827,7 @@ export default class DeviceAgent {
           // 将百分比转换为 dBm 大概值（简化计算）
           const percentage = parseInt(signalMatch[1])
           signal = Math.round(-100 + (percentage * 0.7)) // 简化的 dBm 估算
+          console.log('✅ Windows WiFi: 成功获取信号强度:', `${percentage}% (${signal}dBm)`)
         }
       } catch (error) {
         console.error('⚠️ 获取 WiFi 信号强度失败:', error.message)
@@ -1100,20 +955,12 @@ export default class DeviceAgent {
   }
 
   // 在拿到 deployPath 后，计算 storage 与回滚能力并上报
-  async updateSystemInfoAfterRegistration(deployPath) {
-    if (!deployPath || typeof deployPath !== 'string') {
-      console.error('❌ 更新系统信息: 部署路径参数无效')
-      return
-    }
-
+  async updateSystemInfoAfterRegistration() {
     try {
-      console.log('🔧 开始更新系统信息，使用部署路径:', deployPath)
+      console.log('🔧 开始更新系统信息')
 
-      // 直接使用传入的路径，该路径应该已经通过安全验证
-      const safeDeployPath = path.resolve(deployPath)
+      // 获取基础系统信息，不进行存储检查
 
-      const diskInfo = await this.getDiskInfoByPath(safeDeployPath)
-      const writable = await this.checkWritable(safeDeployPath)
       const rollbackAvailable = await this.checkRollbackAvailable()
 
       const payload = {
@@ -1126,10 +973,6 @@ export default class DeviceAgent {
           osVersion: (await si.osInfo())?.release || null,
           arch: this.config.device.arch
         },
-        storage: {
-          diskFreeBytes: diskInfo?.free ?? null,
-          writable
-        },
         deploy: {
           rollbackAvailable
         },
@@ -1139,8 +982,6 @@ export default class DeviceAgent {
       }
 
       console.log('📊 系统信息收集完成:', {
-        diskFreeBytes: diskInfo?.free ?? null,
-        writable,
         rollbackAvailable,
         arch: this.config.device.arch
       })
@@ -1156,39 +997,6 @@ export default class DeviceAgent {
     }
   }
 
-  async getDiskInfoByPath(targetPath) {
-    if (!targetPath || typeof targetPath !== 'string') {
-      console.error('❌ 获取磁盘信息: 路径参数无效')
-      return null
-    }
-
-    try {
-      const fsSize = await si.fsSize()
-      // 简单匹配：找到包含路径的分区
-      const match = fsSize.find((v) => targetPath.startsWith(v.mount))
-      return match ? { free: match.available, total: match.size, mount: match.mount } : null
-    } catch (error) {
-      console.error('⚠️ 获取磁盘信息失败:', error.message)
-      return null
-    }
-  }
-
-  async checkWritable(targetPath) {
-    if (!targetPath || typeof targetPath !== 'string') {
-      console.error('❌ 检查写权限: 路径参数无效')
-      return null
-    }
-
-    try {
-      const testFile = path.join(targetPath, `.rwtest-${Date.now()}`)
-      await fs.outputFile(testFile, 'test')
-      await fs.remove(testFile)
-      return true
-    } catch (error) {
-      console.error(`⚠️ 检查目录写权限失败: ${targetPath}`, error.message)
-      return false
-    }
-  }
 
   async checkRollbackAvailable() {
     try {
@@ -1391,7 +1199,6 @@ export default class DeviceAgent {
       // 清理所有资源
       this.cleanup()
 
-      console.log('✅ 优雅关闭完成')
     } catch (error) {
       console.error('❌ 优雅关闭时发生错误:', error.message)
       // 强制清理

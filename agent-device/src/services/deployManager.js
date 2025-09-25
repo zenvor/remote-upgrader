@@ -1,9 +1,9 @@
 // 中文注释：ESM 导入
+import AdmZip from 'adm-zip'
 import fs from 'fs-extra'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
-import AdmZip from 'adm-zip'
-import { BackupHelper, DeployResult, ErrorLogger, FileHelper, VersionHelper } from '../utils/common.js'
+import { BackupHelper, DateHelper, DeployResult, ErrorLogger, FileHelper, VersionHelper } from '../utils/common.js'
 import { defaultPathValidator } from '../utils/pathValidator.js'
 
 export default class DeployManager {
@@ -52,26 +52,24 @@ export default class DeployManager {
 
   async initialize() {
     try {
-      // 确保必要目录存在
-      await fs.ensureDir(this.frontendDir)
-      await fs.ensureDir(this.backendDir)
+      // 只确保备份目录存在，不创建部署目录
+      // 部署目录将在有实际部署需求时才创建
       await fs.ensureDir(this.backupDir)
 
       // 初始化部署路径配置文件
       await this.initializeDeployPathsConfig()
 
       console.log('✅ 部署管理器初始化完成')
-      console.log(`📂 前端目录: ${this.frontendDir}`)
-      console.log(`📂 后端目录: ${this.backendDir}`)
       console.log(`📂 备份目录: ${this.backupDir}`)
       console.log(`🗂 备份策略: ${this.maxBackups > 0 ? `保留最新 ${this.maxBackups} 个` : '保留所有备份'}`)
+      console.log(`ℹ️ 部署目录将从 deploy-paths.json 配置文件中获取`)
     } catch (error) {
       ErrorLogger.logError('部署管理器初始化', error)
       throw error
     }
   }
 
-  async deploy(project, packagePath, version, deployPathOverride = null) {
+  async deploy(project, packagePath, version, deployPathOverride = null, preservedPaths = []) {
     // 参数验证
     if (!project || !packagePath) {
       throw new Error('project 和 packagePath 参数不能为空')
@@ -106,7 +104,10 @@ export default class DeployManager {
 
       // 2. 解压和部署新版本
       console.log(`🔄 开始部署新版本 ${version}...`)
-      const deployResult = await this.extractAndDeploy(packagePath, targetDir, project)
+      if (preservedPaths.length > 0) {
+        console.log(`🛡️ 启用白名单保护，保护路径: ${preservedPaths.join(', ')}`)
+      }
+      const deployResult = await this.extractAndDeploy(packagePath, targetDir, project, preservedPaths)
 
       if (!deployResult.success) {
         // 部署失败，尝试恢复备份
@@ -274,41 +275,36 @@ export default class DeployManager {
     }
   }
 
-  async extractAndDeploy(packagePath, targetDir, project) {
+  async extractAndDeploy(packagePath, targetDir, project, preservedPaths = []) {
     // 参数验证
     if (!packagePath || !targetDir || !project) {
       throw new Error('packagePath, targetDir 和 project 参数不能为空')
     }
     try {
-      // 确保目标目录存在
-      await fs.ensureDir(targetDir)
-
-      // 部署前目录状态检查
-      console.log(`🔍 部署前目录状态检查: ${targetDir}`)
-      await this.checkDirectoryStatus(targetDir, '部署前')
-
-      // 清空目标目录（删除所有旧文件，确保完全替换）
-      console.log(`🗑 开始清空目标目录: ${targetDir}`)
-      await this.ensureDirectoryEmpty(targetDir)
-
-      // 清空后检查
-      console.log(`🔍 清空后目录状态检查: ${targetDir}`)
-      await this.checkDirectoryStatus(targetDir, '清空后')
+      // 准备目标目录（使用通用方法）
+      await this.prepareTargetDirectory(targetDir, preservedPaths, '部署')
 
       // 检查包文件类型
       const ext = path.extname(packagePath).toLowerCase()
 
       let extractResult
       if (ext === '.zip') {
-        extractResult = await this.extractZip(packagePath, targetDir)
+        extractResult = await this.extractZip(packagePath, targetDir, preservedPaths)
       } else if (ext === '.tar' || ext === '.tgz' || ext === '.gz') {
         throw new Error(`不支持的压缩格式: ${ext}。仅支持 ZIP 格式，请重新打包为 ZIP 文件。`)
       } else {
-        // 直接复制文件
+        // 直接复制文件（支持白名单保护）
         const fileName = path.basename(packagePath)
         const fileTargetPath = path.join(targetDir, fileName)
-        await FileHelper.safeCopy(packagePath, fileTargetPath)
-        extractResult = DeployResult.success('文件复制完成')
+
+        // 检查是否被白名单保护
+        if (!this.isPathPreserved(fileName, preservedPaths)) {
+          await FileHelper.safeCopy(packagePath, fileTargetPath)
+          extractResult = DeployResult.success('文件复制完成')
+        } else {
+          console.log(`🛡️ 跳过白名单保护文件: ${fileName}`)
+          extractResult = DeployResult.success('文件复制完成（跳过白名单文件）')
+        }
       }
 
       // 解压完成后验证
@@ -334,7 +330,7 @@ export default class DeployManager {
     }
   }
 
-  async extractZip(zipPath, targetDir) {
+  async extractZip(zipPath, targetDir, preservedPaths = []) {
     try {
       console.log(`🔧 准备解压ZIP文件:`)
       console.log(`  源文件: ${zipPath}`)
@@ -370,21 +366,79 @@ export default class DeployManager {
 
       // 解压文件
       console.log(`📂 开始解压到目标目录...`)
-      zip.extractAllTo(targetDir, true)
+
+      if (preservedPaths.length === 0) {
+        // 没有白名单，使用快速解压
+        zip.extractAllTo(targetDir, true)
+        console.log(`✅ 使用快速解压模式`)
+      } else {
+        // 有白名单，使用选择性解压
+        console.log(`🛡️ 使用白名单保护模式解压`)
+        console.log(`🛡️ 保护路径: ${preservedPaths.join(', ')}`)
+
+        let extractedCount = 0
+        let skippedCount = 0
+        const skippedFiles = []
+
+        for (const entry of zipEntries) {
+          const entryPath = entry.entryName
+
+          // 检查是否为白名单路径
+          if (this.isPathPreserved(entryPath, preservedPaths)) {
+            skippedCount++
+            skippedFiles.push(entryPath)
+            console.log(`🛡️ 跳过白名单文件: ${entryPath}`)
+            continue
+          }
+
+          // 解压非白名单文件
+          try {
+            if (entry.isDirectory) {
+              // 创建目录
+              const dirPath = path.join(targetDir, entryPath)
+              // eslint-disable-next-line no-await-in-loop -- 需要顺序创建目录结构，避免并发冲突
+              await fs.ensureDir(dirPath)
+            } else {
+              // 解压文件
+              const filePath = path.join(targetDir, entryPath)
+              const fileDir = path.dirname(filePath)
+              // eslint-disable-next-line no-await-in-loop -- 需要在写入前确保父目录存在
+              await fs.ensureDir(fileDir)
+              const content = entry.getData()
+              // eslint-disable-next-line no-await-in-loop -- 顺序写入以降低文件系统竞争风险
+              await fs.writeFile(filePath, content)
+            }
+            extractedCount++
+          } catch (extractError) {
+            console.error(`❌ 解压文件失败: ${entryPath} - ${extractError.message}`)
+            // 继续解压其他文件，不中断整个过程
+          }
+        }
+
+        console.log(`✅ 选择性解压完成:`)
+        console.log(`  📁 解压文件数: ${extractedCount}`)
+        console.log(`  🛡️ 跳过文件数: ${skippedCount}`)
+
+        if (skippedFiles.length > 0 && skippedFiles.length <= 10) {
+          console.log(`  🛡️ 跳过的文件: ${skippedFiles.join(', ')}`)
+        } else if (skippedFiles.length > 10) {
+          console.log(`  🛡️ 跳过的文件: ${skippedFiles.slice(0, 10).join(', ')} ... 还有${skippedFiles.length - 10}个`)
+        }
+      }
 
       // 验证解压结果
-      const extractedFiles = await fs.readdir(targetDir)
-      const fileCount = extractedFiles.length
+      const afterFiles = await fs.readdir(targetDir)
+      const totalFiles = afterFiles.length
 
-      if (fileCount === 0) {
+      if (totalFiles === 0) {
         throw new Error('解压完成但目标目录为空')
       }
 
-      console.log(`✅ ZIP 解压成功，解压了 ${fileCount} 个文件/目录`)
+      console.log(`✅ ZIP 解压成功，目录总文件数: ${totalFiles}`)
 
       // 显示解压的主要文件
-      const displayFiles = extractedFiles.slice(0, 5)
-      console.log(`📋 主要文件: ${displayFiles.join(', ')}${fileCount > 5 ? ' ...' : ''}`)
+      const displayFiles = afterFiles.slice(0, 5)
+      console.log(`📋 主要文件: ${displayFiles.join(', ')}${totalFiles > 5 ? ' ...' : ''}`)
 
       return DeployResult.success('ZIP 解压完成')
     } catch (error) {
@@ -393,7 +447,6 @@ export default class DeployManager {
       return DeployResult.error(error)
     }
   }
-
 
   async updateVersionInfo(project, version, packagePath, targetDirOverride = null) {
     // 参数验证
@@ -532,40 +585,197 @@ export default class DeployManager {
   /**
    * 确保目录完全清空的强化方法
    * 使用多种策略逐步升级清空力度
+   * @param {string} targetDir - 目标目录
+   * @param {Array} preservedPaths - 白名单路径，这些文件/目录不会被删除
    */
-  async ensureDirectoryEmpty(targetDir) {
+  async ensureDirectoryEmpty(targetDir, preservedPaths = []) {
     try {
-      // 方法1：尝试使用 fs.emptyDir
-      console.log(`🔧 方法1：使用 fs.emptyDir 清空目录...`)
-      await fs.emptyDir(targetDir)
-      console.log(`✅ fs.emptyDir 执行完成`)
+      if (preservedPaths.length === 0) {
+        // 没有白名单，使用原有的快速清空方法
+        console.log(`🔧 方法1：使用 fs.emptyDir 清空目录...`)
+        await fs.emptyDir(targetDir)
+        console.log(`✅ fs.emptyDir 执行完成`)
 
-      // 严格验证清空结果
-      const afterFiles = await fs.readdir(targetDir)
-      console.log(`📁 清空后文件数量: ${afterFiles.length}`)
+        // 严格验证清空结果
+        const afterFiles = await fs.readdir(targetDir)
+        console.log(`📁 清空后文件数量: ${afterFiles.length}`)
 
-      // 如果还有文件，说明 fs.emptyDir 没有生效
-      if (afterFiles.length > 0) {
-        console.warn(`⚠️ fs.emptyDir 未完全清空，剩余文件: ${afterFiles.join(', ')}`)
-        await this.forceEmptyDirectory(targetDir, afterFiles)
-      } else {
-        console.log(`✅ 目标目录清空成功`)
-      }
-    } catch (emptyError) {
-      ErrorLogger.logError('fs.emptyDir 失败', emptyError, { targetDir })
-
-      // Fs.emptyDir 完全失败时，尝试读取目录并强制清空
-      try {
-        const files = await fs.readdir(targetDir)
-        if (files.length > 0) {
-          console.log(`🔧 fs.emptyDir 失败，尝试强制清空 ${files.length} 个文件...`)
-          await this.forceEmptyDirectory(targetDir, files)
+        if (afterFiles.length > 0) {
+          console.warn(`⚠️ fs.emptyDir 未完全清空，剩余文件: ${afterFiles.join(', ')}`)
+          await this.forceEmptyDirectory(targetDir, afterFiles)
+        } else {
+          console.log(`✅ 目标目录清空成功`)
         }
-      } catch (readError) {
-        ErrorLogger.logError('无法读取目录内容', readError, { targetDir })
-        throw new Error(`无法清空目标目录: ${emptyError.message}`)
+        return
+      }
+
+      // 有白名单，使用选择性删除
+      console.log(`🛡️ 使用白名单保护模式清空目录...`)
+      console.log(`🛡️ 保护路径: ${preservedPaths.join(', ')}`)
+
+      const allFiles = await fs.readdir(targetDir)
+      console.log(`📁 目录总文件数: ${allFiles.length}`)
+
+      // 过滤出需要删除的文件（不在白名单中）
+      const filesToDelete = []
+      const preservedFiles = []
+
+      for (const file of allFiles) {
+        if (this.isPathPreserved(file, preservedPaths)) {
+          preservedFiles.push(file)
+        } else {
+          filesToDelete.push(file)
+        }
+      }
+
+      console.log(`🗑️ 需要删除的文件数: ${filesToDelete.length}`)
+      console.log(`🛡️ 保护的文件数: ${preservedFiles.length}`)
+
+      if (preservedFiles.length > 0) {
+        console.log(`🛡️ 保护的文件/目录: ${preservedFiles.join(', ')}`)
+      }
+
+      // 删除非白名单文件
+      for (const file of filesToDelete) {
+        const filePath = path.join(targetDir, file)
+        try {
+          // eslint-disable-next-line no-await-in-loop -- 顺序处理可降低文件系统竞争风险
+          const stat = await fs.stat(filePath)
+          // eslint-disable-next-line no-await-in-loop -- 需要顺序删除以避免目录依赖冲突
+          await fs.remove(filePath)
+          console.log(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
+        } catch (removeError) {
+          ErrorLogger.logError(`删除文件失败: ${file}`, removeError, { filePath })
+          console.error(`❌ 删除文件失败: ${file} - ${removeError.message}`)
+        }
+      }
+
+      console.log(`✅ 选择性清空完成，保护了 ${preservedFiles.length} 个文件/目录`)
+    } catch (error) {
+      ErrorLogger.logError('确保目录清空失败', error, { targetDir })
+      throw new Error(`无法清空目标目录: ${error.message}`)
+    }
+  }
+
+  /**
+   * 检查路径是否在白名单中（受保护）
+   * @param {string} filePath - 文件路径
+   * @param {Array} preservedPaths - 白名单路径列表
+   * @returns {boolean} 是否受保护
+   */
+  isPathPreserved(filePath, preservedPaths) {
+    if (!preservedPaths || preservedPaths.length === 0) {
+      return false
+    }
+
+    for (const preservedPattern of preservedPaths) {
+      if (this.matchPath(filePath, preservedPattern)) {
+        return true
       }
     }
+
+    return false
+  }
+
+  /**
+   * 路径匹配方法
+   * @param {string} filePath - 文件路径
+   * @param {string} pattern - 匹配模式
+   * @returns {boolean} 是否匹配
+   */
+  matchPath(filePath, pattern) {
+    // 精确匹配
+    if (filePath === pattern) {
+      return true
+    }
+
+    // 目录匹配：如果模式以 '/' 结尾，则匹配目录
+    if (pattern.endsWith('/')) {
+      const dirName = pattern.slice(0, -1)
+      return filePath === dirName || filePath.startsWith(dirName + '/')
+    }
+
+    // 扩展：支持通配符匹配（可选）
+    // 这里可以添加更复杂的模式匹配逻辑
+
+    return false
+  }
+
+  /**
+   * 通用的文件复制方法（支持白名单保护）
+   * @param {string} sourceDir - 源目录
+   * @param {string} targetDir - 目标目录
+   * @param {Array} preservedPaths - 白名单路径
+   * @param {Object} options - 复制选项
+   */
+  async copyWithPreservation(sourceDir, targetDir, preservedPaths = [], options = {}) {
+    const {
+      overwrite = true,
+      excludeFiles = ['backup-info.json'],
+      logPrefix = '📂'
+    } = options
+
+    console.log(`${logPrefix} 复制文件: ${path.basename(sourceDir)} -> ${path.basename(targetDir)}`)
+
+    if (preservedPaths.length > 0) {
+      console.log(`🛡️ 白名单保护: ${preservedPaths.join(', ')}`)
+    }
+
+    let copiedCount = 0
+    let skippedCount = 0
+
+    await fs.copy(sourceDir, targetDir, {
+      overwrite,
+      filter: (src) => {
+        const relativePath = path.relative(sourceDir, src)
+
+        // 排除指定文件
+        for (const excludeFile of excludeFiles) {
+          if (src.endsWith(excludeFile)) {
+            return false
+          }
+        }
+
+        // 检查白名单保护
+        if (preservedPaths.length > 0 && this.isPathPreserved(relativePath, preservedPaths)) {
+          console.log(`🛡️ 跳过白名单文件: ${relativePath}`)
+          skippedCount++
+          return false
+        }
+
+        copiedCount++
+        return true
+      }
+    })
+
+    console.log(`✅ 复制完成: ${copiedCount} 个文件，跳过 ${skippedCount} 个白名单文件`)
+    return { copiedCount, skippedCount }
+  }
+
+  /**
+   * 准备目标目录（创建、清空、验证）
+   * @param {string} targetDir - 目标目录路径
+   * @param {Array} preservedPaths - 白名单保护路径
+   * @param {string} operation - 操作类型（用于日志）
+   */
+  async prepareTargetDirectory(targetDir, preservedPaths = [], operation = '部署') {
+    console.log(`🔍 ${operation}前目录状态检查: ${targetDir}`)
+
+    // 确保目标目录存在
+    await fs.ensureDir(targetDir)
+
+    // 检查目录状态
+    await this.checkDirectoryStatus(targetDir, `${operation}前`)
+
+    // 清空目标目录（支持白名单保护）
+    console.log(`🗑️ 开始清空目标目录: ${targetDir}`)
+    await this.ensureDirectoryEmpty(targetDir, preservedPaths)
+
+    // 清空后检查
+    console.log(`🔍 清空后目录状态检查: ${targetDir}`)
+    await this.checkDirectoryStatus(targetDir, '清空后')
+
+    console.log(`✅ 目录准备完成: ${targetDir}`)
   }
 
   /**
@@ -699,7 +909,7 @@ export default class DeployManager {
     })
   }
 
-  async rollback(project, targetVersion = null) {
+  async rollback(project, targetVersion = null, preservedPaths = []) {
     // 参数验证
     if (!project) {
       throw new Error('project 参数不能为空')
@@ -708,6 +918,9 @@ export default class DeployManager {
       throw new Error('project 必须是 frontend 或 backend')
     }
     console.log(`开始回滚 ${project} 到版本: ${targetVersion || '最新备份'}`)
+    if (preservedPaths.length > 0) {
+      console.log(`🛡️ 回滚白名单保护: ${preservedPaths.join(', ')}`)
+    }
 
     try {
       // 优先使用最新备份链接进行快速回滚
@@ -746,7 +959,7 @@ export default class DeployManager {
         }
       }
 
-      return await this.performRollback(project, backupPath)
+      return await this.performRollback(project, backupPath, preservedPaths)
     } catch (error) {
       ErrorLogger.logError('回滚', error, { project, targetVersion })
       return DeployResult.error(error)
@@ -756,7 +969,7 @@ export default class DeployManager {
   /**
    * 执行实际的回滚操作
    */
-  async performRollback(project, backupPath) {
+  async performRollback(project, backupPath, preservedPaths = []) {
     let targetDir
     try {
       // 优先使用当前配置的部署路径
@@ -780,15 +993,15 @@ export default class DeployManager {
     console.log(`📂 目标目录: ${targetDir}`)
 
     try {
-      // 清空目标目录
-      console.log(`🔄 清空目标目录...`)
-      await fs.emptyDir(targetDir)
+      // 清空目标目录（支持白名单保护）
+      console.log(`🔄 清空目标目录（回滚模式）...`)
+      await this.ensureDirectoryEmpty(targetDir, preservedPaths)
 
-      // 恢复备份版本
-      console.log(`🔄 恢复备份版本: ${path.basename(backupPath)} -> ${targetDir}`)
-      await fs.copy(backupPath, targetDir, {
+      // 恢复备份版本（使用通用方法，支持白名单保护）
+      await this.copyWithPreservation(backupPath, targetDir, preservedPaths, {
         overwrite: true,
-        filter: (src) => !src.endsWith('backup-info.json') // 排除备份信息文件
+        excludeFiles: ['backup-info.json'],
+        logPrefix: '🔄'
       })
 
       console.log(`✅ 回滚完成: ${project}`)
@@ -883,15 +1096,25 @@ export default class DeployManager {
           targetDir = info.sourceDir || defaultTarget
         }
 
-        await fs.emptyDir(targetDir)
-        await fs.copy(backupPath, targetDir, {
+        // 准备目标目录（无白名单保护）
+        await this.prepareTargetDirectory(targetDir, [], '备份恢复')
+
+        // 使用通用复制方法
+        await this.copyWithPreservation(backupPath, targetDir, [], {
           overwrite: true,
-          filter: (src) => !src.endsWith('backup-info.json')
+          excludeFiles: ['backup-info.json'],
+          logPrefix: '🔄'
         })
       } catch {
         const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
-        const targetDir = await this.getActualDeployPath(project).catch(() => defaultTarget) || defaultTarget
-        await fs.copy(backupPath, targetDir, { overwrite: true })
+        const targetDir = (await this.getActualDeployPath(project).catch(() => defaultTarget)) || defaultTarget
+
+        // 备用恢复方法
+        await this.copyWithPreservation(backupPath, targetDir, [], {
+          overwrite: true,
+          excludeFiles: ['backup-info.json'],
+          logPrefix: '🔄'
+        })
       }
     }
   }

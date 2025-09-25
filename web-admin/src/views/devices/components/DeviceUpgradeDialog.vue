@@ -11,7 +11,7 @@
     @cancel="cancel"
     @ok="handleSubmit"
   >
-    <div v-if="targetDevices.length > 0">
+    <div>
       <!-- 目标设备 -->
       <a-card title="目标设备" size="small" :bordered="false" class="info-card">
         <template v-if="targetDevices.length <= 3">
@@ -27,6 +27,7 @@
             </div>
           </a-space>
         </template>
+
         <template v-else>
           <a-statistic :value="targetDevices.length" suffix="台设备" title="批量升级" />
           <div style="margin-top: 12px">
@@ -59,7 +60,6 @@
           </a-form-item>
 
           <a-form-item
-            v-if="formData.project"
             label="升级包"
             name="packageName"
             :rules="[{ required: true, message: '请选择升级包', trigger: 'change' }]"
@@ -79,8 +79,31 @@
             />
           </a-form-item>
 
-          <a-form-item v-if="formData.packageName" label="部署路径" name="deployPath">
+          <a-form-item :disabled="!formData.packageName" label="部署路径" name="deployPath">
             <a-input v-model:value="formData.deployPath" placeholder="例如：/opt/frontend 或 /opt/backend" />
+          </a-form-item>
+
+          <a-form-item :disabled="!formData.packageName" label="保护文件" name="preservedPaths">
+            <a-select
+              v-model:value="formData.preservedPaths"
+              mode="tags"
+              placeholder="输入需要保护的文件或目录，避免被删除和覆盖"
+              :options="commonPreservedPaths"
+              style="width: 100%"
+              :max-tag-count="3"
+              allow-clear
+            >
+              <template #suffixIcon>
+                <SafetyOutlined />
+              </template>
+            </a-select>
+            <div style="margin-top: 4px; font-size: 12px; color: #666">
+              <div>
+                示例：<a-tag size="small">.env</a-tag> <a-tag size="small">config/</a-tag>
+                <a-tag size="small">logs/</a-tag>
+              </div>
+              <div style="margin-top: 2px">💡 白名单文件在升级时不会被删除或覆盖，确保服务正常运行</div>
+            </div>
           </a-form-item>
         </a-form>
 
@@ -99,7 +122,6 @@
           </a-descriptions>
         </div>
       </a-card>
-
     </div>
   </a-modal>
 </template>
@@ -108,7 +130,7 @@
 import { ref, computed, watch } from 'vue'
 import { deviceApi, packageApi } from '@/api'
 import toast from '@/utils/toast'
-import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
+import { CloudOutlined, HddOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 
 // Props
 const props = defineProps({
@@ -125,10 +147,11 @@ const open = defineModel('open', { type: Boolean, default: false })
 
 // 内部表单数据管理
 const formData = ref({
-  // 业务字段：项目类型、包名、部署路径
+  // 业务字段：项目类型、包名、部署路径、白名单
   project: 'frontend',
   packageName: null,
   deployPath: '',
+  preservedPaths: [],
   options: {
     backup: true,
     rollbackOnFail: true,
@@ -153,7 +176,8 @@ const upgradeDevice = async (device, project, packageInfo = null, options = {}) 
       fileName: packageInfo.fileName,
       version: packageInfo.version,
       fileMD5: packageInfo.fileMD5,
-      deployPath: options.deployPath || undefined
+      deployPath: options.deployPath || undefined,
+      preservedPaths: options.preservedPaths || []
     })
 
     if (response.success) {
@@ -214,6 +238,16 @@ const resolveStoredDeployPath = (project) => {
   return null
 }
 
+// 获取设备的白名单配置
+const resolveStoredPreservedPaths = (project) => {
+  if (!project || targetDevices.value.length === 0) return []
+  const primary = targetDevices.value[0]
+  if (!primary || !primary.deviceId) return []
+
+  const preservedPaths = primary?.preservedPaths || {}
+  return preservedPaths[project]?.paths || []
+}
+
 // 项目选项
 const projectOptions = [
   {
@@ -230,6 +264,20 @@ const projectOptions = [
     color: '#10B981',
     icon: HddOutlined
   }
+]
+
+// 常用白名单路径选项
+const commonPreservedPaths = [
+  { label: '.env - 环境配置文件', value: '.env' },
+  { label: 'config/ - 配置目录', value: 'config/' },
+  { label: 'logs/ - 日志目录', value: 'logs/' },
+  { label: 'storage/ - 存储目录', value: 'storage/' },
+  { label: 'data/ - 数据目录', value: 'data/' },
+  { label: 'uploads/ - 上传目录', value: 'uploads/' },
+  { label: 'public/ - 静态资源', value: 'public/' },
+  { label: 'vendor/ - 依赖包', value: 'vendor/' },
+  { label: 'node_modules/ - Node依赖', value: 'node_modules/' },
+  { label: 'database/ - 数据库文件', value: 'database/' }
 ]
 
 // 计算属性
@@ -275,7 +323,7 @@ const deviceStatusSummary = computed(() => {
   }))
 })
 
-// 监听项目变化，清空包选择并设置默认部署路径
+// 监听项目变化，清空包选择并设置默认部署路径和白名单
 watch(
   () => formData.value?.project,
   (newProject) => {
@@ -283,12 +331,14 @@ watch(
     if (!formData.value) return
     formData.value.packageName = null
     const storedPath = resolveStoredDeployPath(newProject)
-    // 为不同项目设置默认路径，优先使用已记录的部署路径
+    const storedPreservedPaths = resolveStoredPreservedPaths(newProject)
+    // 为不同项目设置默认路径和白名单，优先使用已记录的配置
     formData.value.deployPath = storedPath || null
+    formData.value.preservedPaths = storedPreservedPaths || []
   }
 )
 
-// 监听目标设备变化，清空包选择并设置默认部署路径
+// 监听目标设备变化，清空包选择并设置默认部署路径和白名单
 watch(
   () => targetDevices.value,
   (devices) => {
@@ -297,22 +347,22 @@ watch(
     }
     formData.value.packageName = null
     const storedPath = resolveStoredDeployPath(formData.value.project)
-    if (storedPath) {
-      formData.value.deployPath = storedPath
-    } else {
-      formData.value.deployPath = formData.value.project === 'backend' ? null : null
-    }
+    const storedPreservedPaths = resolveStoredPreservedPaths(formData.value.project)
+
+    formData.value.deployPath = storedPath || null
+    formData.value.preservedPaths = storedPreservedPaths || []
   },
   { deep: true }
 )
 
-
 // 重置表单到初始状态
 const resetForm = () => {
+  const defaultProject = 'frontend'
   formData.value = {
-    project: 'frontend',
+    project: defaultProject,
     packageName: null,
-    deployPath: resolveStoredDeployPath('frontend') || '/opt/frontend',
+    deployPath: resolveStoredDeployPath(defaultProject) || null,
+    preservedPaths: resolveStoredPreservedPaths(defaultProject) || [],
     options: {
       backup: true,
       rollbackOnFail: true,
@@ -362,6 +412,12 @@ const handleSubmit = async () => {
       options.deployPath = deployPath
     } else {
       delete options.deployPath
+    }
+
+    // 添加白名单路径
+    const preservedPaths = formData.value.preservedPaths || []
+    if (preservedPaths.length > 0) {
+      options.preservedPaths = preservedPaths
     }
     const target = targetDevices.value
 

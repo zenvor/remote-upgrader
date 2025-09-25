@@ -101,12 +101,19 @@ npm start
 {
   command: "cmd:rollback",
   data: {
-    project: "frontend|backend"
+    project: "frontend|backend",
+    // 可选：白名单路径，这些文件/目录在回滚时不会被删除
+    preservedPaths: [
+      ".env",          // 保护配置文件
+      "storage/",      // 保护存储目录
+      "logs/",         // 保护日志目录
+      "user-data/"     // 保护用户数据
+    ]
   }
 }
 ```
 
-说明：设备端仅支持回滚到上一份备份版本，命令无需指定目标版本。
+说明：设备端仅支持回滚到上一份备份版本，命令无需指定目标版本。支持白名单保护，避免删除重要文件。
 
 #### 状态查询 (cmd:status)
 

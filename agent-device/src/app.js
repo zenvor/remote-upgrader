@@ -1,7 +1,7 @@
 // 使用 ES Module 语法
 // 中文注释：设备端入口文件，负责启动 DeviceAgent
-import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import config from './config/config.js'
 import DeviceAgent from './core/deviceAgent.js'
 
@@ -33,7 +33,6 @@ async function gracefulShutdown(signal) {
     if (agent) {
       await agent.gracefulShutdown()
     }
-    console.log('✅ 设备代理已安全关闭')
     // eslint-disable-next-line n/no-process-exit -- 信号处理器需要强制退出进程
     process.exit(0)
   } catch (error) {

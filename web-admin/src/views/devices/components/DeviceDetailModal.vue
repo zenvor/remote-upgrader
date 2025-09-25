@@ -116,16 +116,6 @@
           </div>
           <div class="card-content">
             <div class="info-item">
-              <span class="info-label">磁盘可用空间</span>
-              <span class="info-value">{{ formatBytes(device.diskFreeBytes) }}</span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">目录可写状态</span>
-              <a-tag :color="device.writable ? 'green' : 'red'">
-                {{ device.writable ? '可写' : '只读' }}
-              </a-tag>
-            </div>
-            <div class="info-item">
               <span class="info-label">系统运行时长</span>
               <span class="info-value duration">{{ formatDuration(device.uptimeSeconds) }}</span>
             </div>
@@ -162,10 +152,6 @@
                   {{ getWifiSignalLabel(device.wifiSignal) }}
                 </span>
               </div>
-            </div>
-            <div class="info-item">
-              <span class="info-label">公网IP</span>
-              <span class="info-value code">{{ device.publicIp || '获取中...' }}</span>
             </div>
             <div class="info-item">
               <span class="info-label">内网IP</span>
@@ -292,17 +278,6 @@ const formatDuration = (totalSeconds) => {
   return `${minutes}分钟`
 }
 
-// 格式化字节大小
-const formatBytes = (bytes) => {
-  if (!Number.isFinite(bytes) || bytes < 0) return '未知'
-  if (bytes === 0) return '0 B'
-
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
-}
 
 // WiFi信号强度标签
 const getWifiSignalLabel = (signal) => {

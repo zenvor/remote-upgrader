@@ -42,7 +42,7 @@
                 placeholder="搜索设备名称或ID"
                 style="width: 200px"
                 allow-clear
-                @search="filterDevices"
+                @search="handleQuery"
               />
             </a-form-item>
             <a-form-item name="status">
@@ -51,7 +51,7 @@
                 placeholder="设备状态"
                 style="width: 200px"
                 allow-clear
-                @change="filterDevices"
+                @change="handleQuery"
               >
                 <a-select-option value="online">在线</a-select-option>
                 <a-select-option value="offline">离线</a-select-option>
@@ -385,7 +385,7 @@ function prevStep() {
   }
 }
 
-function filterDevices() {
+function handleQuery() {
   devicePagination.current = 1
   fetchDevices()
 }

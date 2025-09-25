@@ -1,0 +1,52 @@
+{
+  "packages": {
+    "frontend": {
+      "uploadDir": "uploads/packages/frontend",
+      "maxFileSize": "50MB",
+      "allowedExtensions": [
+        ".zip",
+        ".tar.gz"
+      ],
+      "packages": {}
+    },
+    "backend": {
+      "uploadDir": "uploads/packages/backend",
+      "maxFileSize": "100MB",
+      "allowedExtensions": [
+        ".zip",
+        ".tar.gz"
+      ],
+      "packages": {
+        "dist-1.0.3.zip": {
+          "fileName": "dist-1.0.3.zip",
+          "fileSize": 1072190,
+          "fileMD5": "574a20a64854e3e9f1fe4d67ef705a8d",
+          "version": "v1.0.3",
+          "uploadedAt": "2025-09-25T08:31:25.446Z",
+          "uploadedBy": "system"
+        },
+        "school-v1.0.1 15.53.40.zip": {
+          "fileName": "school-v1.0.1 15.53.40.zip",
+          "fileSize": 61977337,
+          "fileMD5": "b8fadb783fd6ee6947b955d86ba708f8",
+          "version": "v1.0.1",
+          "uploadedAt": "2025-09-25T09:22:56.063Z",
+          "uploadedBy": "system"
+        }
+      }
+    }
+  },
+  "settings": {
+    "autoCleanup": false,
+    "maxPackageCount": 10,
+    "storageQuota": "500MB"
+  },
+  "statistics": {
+    "totalPackages": 2,
+    "frontendPackages": 0,
+    "backendPackages": 2,
+    "totalSize": "60.13MB",
+    "lastUpdated": "2025-09-25"
+  },
+  "lastUpdated": "2025-09-25"
+}

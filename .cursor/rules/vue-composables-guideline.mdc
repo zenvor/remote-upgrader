@@ -1,7 +1,9 @@
 ---
 description: Vue Composables 使用简明规则
+globs: *.vue
 alwaysApply: false
 ---
+
 - 仅在以下两种场景下使用 Composables：
   - 需要在多个组件中复用状态化逻辑（如 ref、computed）
   - 当前组件逻辑复杂、结构混乱，需要功能性拆分

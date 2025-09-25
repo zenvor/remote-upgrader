@@ -309,6 +309,21 @@ export const DateHelper = {
   },
 
   /**
+   * 格式化日期为 YYYYMMDDHHmm 格式
+   * @param {Date|string|number} date - 日期对象、ISO字符串或时间戳
+   * @returns {string} YYYYMMDDHHmm 格式的日期时间字符串
+   */
+  formatToYYYYMMDDHHmm(date) {
+    const d = date instanceof Date ? date : new Date(date || Date.now())
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const hour = String(d.getHours()).padStart(2, '0')
+    const minute = String(d.getMinutes()).padStart(2, '0')
+    return `${year}${month}${day}${hour}${minute}`
+  },
+
+  /**
    * 获取当前日期的 YYYY-MM-dd 格式字符串
    * @returns {string}
    */

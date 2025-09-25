@@ -66,7 +66,7 @@
               placeholder="任务状态"
               style="width: 200px"
               allow-clear
-              @change="handleFilterChange"
+              @change="handleQuery"
             >
               <a-select-option value="pending">待执行</a-select-option>
               <a-select-option value="running">执行中</a-select-option>
@@ -80,7 +80,7 @@
               placeholder="任务类型"
               style="width: 200px"
               allow-clear
-              @change="handleFilterChange"
+              @change="handleQuery"
             >
               <a-select-option value="upgrade">升级</a-select-option>
               <a-select-option value="rollback">回滚</a-select-option>
@@ -394,7 +394,7 @@ function refreshTasks() {
   fetchTaskStats()
 }
 
-function handleFilterChange() {
+function handleQuery() {
   pagination.current = 1
   fetchTasks()
 }

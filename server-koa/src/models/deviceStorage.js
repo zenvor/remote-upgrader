@@ -121,7 +121,6 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
       device.network = {
         wifiName: device.network?.wifiName ?? null,
         wifiSignal: device.network?.wifiSignal ?? null,
-        publicIp: device.network?.publicIp ?? null,
         localIp: device.network?.localIp ?? null,
         macAddresses: Array.isArray(device.network?.macAddresses)
           ? device.network.macAddresses
@@ -144,7 +143,6 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
         network: {
           wifiName: network?.wifiName ?? deviceInfo?.network?.wifiName ?? null,
           wifiSignal: network?.wifiSignal ?? deviceInfo?.network?.wifiSignal ?? null,
-          publicIp: network?.publicIp ?? deviceInfo?.network?.publicIp ?? null,
           localIp: network?.localIp ?? deviceInfo?.network?.localIp ?? null,
           macAddresses: Array.isArray(network?.macAddresses)
             ? network.macAddresses
@@ -277,7 +275,6 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
     device.network = device.network || {
       wifiName: null,
       wifiSignal: null,
-      publicIp: null,
       localIp: null,
       macAddresses: []
     }
@@ -289,11 +286,6 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
       device.network.wifiSignal = network.wifiSignal
     }
 
-    if (network.publicIp !== undefined) {
-      device.network.publicIp = network.publicIp
-      // 同步最后一次已知公网 IP
-      device.network.lastKnownIp = network.publicIp
-    }
 
     if (network.localIp !== undefined) {
       device.network.localIp = network.localIp
@@ -584,5 +576,71 @@ export async function cleanupOfflineDevices() {
   } catch (error) {
     console.error('清理离线设备失败:', error)
     throw error
+  }
+}
+
+/**
+ * 保存设备白名单配置
+ * @param {string} deviceId - 设备ID
+ * @param {string} project - 项目类型 ('frontend' | 'backend')
+ * @param {Array} preservedPaths - 白名单路径列表
+ */
+export async function saveDevicePreservedPaths(deviceId, project, preservedPaths = []) {
+  try {
+    const config = await getDevicesConfig()
+
+    if (!config.devices[deviceId]) {
+      throw new Error(`设备不存在: ${deviceId}`)
+    }
+
+    const device = config.devices[deviceId]
+
+    // 确保 preservedPaths 配置存在
+    if (!device.preservedPaths) {
+      device.preservedPaths = {}
+    }
+
+    // 保存项目的白名单配置
+    device.preservedPaths[project] = {
+      paths: Array.isArray(preservedPaths) ? preservedPaths : [],
+      updatedAt: DateHelper.getCurrentDate()
+    }
+
+    console.log(`保存设备 ${deviceId} 的 ${project} 白名单配置: ${preservedPaths.join(', ')}`)
+
+    return await saveDevicesConfig(config)
+  } catch (error) {
+    console.error('保存设备白名单配置失败:', error)
+    throw error
+  }
+}
+
+/**
+ * 获取设备白名单配置
+ * @param {string} deviceId - 设备ID
+ * @param {string} project - 项目类型 ('frontend' | 'backend')，如果不指定则返回所有项目
+ * @returns {Array|Object} 白名单路径或所有项目的白名单配置
+ */
+export async function getDevicePreservedPaths(deviceId, project = null) {
+  try {
+    const config = await getDevicesConfig()
+
+    if (!config.devices[deviceId]) {
+      return project ? [] : {}
+    }
+
+    const device = config.devices[deviceId]
+    const preservedPaths = device.preservedPaths || {}
+
+    if (project) {
+      // 返回特定项目的白名单路径
+      return preservedPaths[project]?.paths || []
+    }
+
+    // 返回所有项目的白名单配置
+    return preservedPaths
+  } catch (error) {
+    console.error('获取设备白名单配置失败:', error)
+    return project ? [] : {}
   }
 }

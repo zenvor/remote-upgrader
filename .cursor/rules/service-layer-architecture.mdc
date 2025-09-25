@@ -1,0 +1,59 @@
+---
+description: Service 层架构规范 - API 调用封装
+globs: *.vue,*.js
+alwaysApply: false
+---
+
+## 核心原则
+- **禁止在组件中直接调用 API**：所有 API 调用必须通过 service 层进行封装
+- **组件专注 UI 逻辑**，service 层处理业务逻辑和数据请求
+
+## 架构分层
+```
+组件层 → Service 层 → API 层 → 后端接口
+```
+
+## 正确示例
+
+```javascript
+// ✅ Service 层封装 API
+// src/services/userService.js
+import { getUserListApi } from '@/api/modules/user.api'
+
+const fetchList = async (params = {}) => {
+  const response = await getUserListApi(params)
+  return normalizeListResponse(response)
+}
+
+export default { fetchList }
+```
+
+```vue
+<!-- ✅ 组件中使用 service -->
+<script setup>
+import userService from '@/services/userService'
+
+const handleCreate = async (formData) => {
+  await userService.create(formData)
+}
+</script>
+```
+
+## 错误示例
+
+```vue
+<!-- ❌ 组件中直接调用 API -->
+<script setup>
+import { createUserApi } from '@/api/modules/user.api'
+
+const handleCreate = async (formData) => {
+  await createUserApi(formData) // 错误：直接调用 API
+}
+</script>
+```
+
+## Service 层规范
+- 单一职责：每个 service 只处理一种业务实体
+- 方法命名：使用语义化方法名（`fetchList`、`create`、`update`、`remove`）
+- JSDoc 注释：为导出方法添加标准注释
+- 纯函数：不包含 UI 副作用，返回 Promise

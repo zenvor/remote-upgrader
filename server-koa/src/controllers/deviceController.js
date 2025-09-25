@@ -1,6 +1,6 @@
 // 中文注释：ESM 导入
 import deviceManager from '../models/deviceManager.js'
-import { getDeviceDeployPaths, getAllDevices as getStoredDevices } from '../models/deviceStorage.js'
+import { getDeviceDeployPaths, getAllDevices as getStoredDevices, saveDevicePreservedPaths, getDevicePreservedPaths } from '../models/deviceStorage.js'
 
 /**
  * 获取设备列表（支持筛选和分页）
@@ -76,7 +76,6 @@ async function getDevices(ctx) {
         // 网络信息（扁平化）
         wifiName: storedDevice.network?.wifiName || null,
         wifiSignal: storedDevice.network?.wifiSignal || null,
-        publicIp: storedDevice.network?.publicIp || null,
         localIp: storedDevice.network?.localIp || null,
         macAddresses: storedDevice.network?.macAddresses || [],
 
@@ -121,7 +120,10 @@ async function getDevices(ctx) {
         },
 
         // 升级历史
-        upgradeHistory: storedDevice.upgradeHistory || []
+        upgradeHistory: storedDevice.upgradeHistory || [],
+
+        // 白名单配置
+        preservedPaths: storedDevice.preservedPaths || {}
       }
     })
 
@@ -212,6 +214,33 @@ async function sendCommand(ctx) {
       }
     }
 
+    if (command === 'cmd:rollback') {
+      const { project } = payload
+      if (!project || !['frontend', 'backend'].includes(project)) {
+        ctx.status = 400
+        ctx.body = {
+          success: false,
+          error: '回滚命令需要有效的 project 参数 (frontend 或 backend)'
+        }
+        return
+      }
+
+      // 获取保存的白名单配置并添加到回滚命令参数中
+      try {
+        const preservedPaths = await getDevicePreservedPaths(deviceId, project)
+        console.log(`🔍 获取设备 ${deviceId} 的 ${project} 白名单配置: ${JSON.stringify(preservedPaths)}`)
+        if (preservedPaths.length > 0) {
+          payload.preservedPaths = preservedPaths
+          console.log(`✅ 获取设备 ${deviceId} 的 ${project} 回滚白名单配置: ${preservedPaths.join(', ')}`)
+        } else {
+          console.log(`⚠️ 设备 ${deviceId} 的 ${project} 没有白名单配置`)
+        }
+      } catch (error) {
+        console.warn(`❌ 获取设备 ${deviceId} 白名单配置失败:`, error.message)
+        // 不中断操作，回滚依然可以进行
+      }
+    }
+
     const success = deviceManager.sendToDevice(deviceId, command, payload)
 
     if (!success) {
@@ -221,6 +250,16 @@ async function sendCommand(ctx) {
         error: '设备不在线或不存在'
       }
       return
+    }
+
+    // 如果是升级命令且发送成功，保存白名单配置
+    if (command === 'cmd:upgrade' && success && payload.preservedPaths) {
+      try {
+        await saveDevicePreservedPaths(deviceId, payload.project, payload.preservedPaths)
+      } catch (error) {
+        console.warn(`保存设备 ${deviceId} 白名单配置失败:`, error.message)
+        // 不中断响应，白名单配置保存失败不影响升级命令发送
+      }
     }
 
     ctx.body = {

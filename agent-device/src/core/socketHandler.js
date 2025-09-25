@@ -1,5 +1,5 @@
 // 中文注释：Socket 事件处理器（ESM 默认导出）
-import { ErrorLogger, DateHelper } from '../utils/common.js'
+import { DateHelper, ErrorLogger } from '../utils/common.js'
 
 export default class SocketHandler {
   constructor(socket, agent) {
@@ -59,6 +59,7 @@ export default class SocketHandler {
 
     // 服务端配置推送：deployPath 更新后立刻触发一次 storage 检测并上报
     this.socket.on('config:deploy-path', (data) => {
+      debugger
       if (data && data.deployPath) {
         this.agent.updateSystemInfoAfterRegistration(data.deployPath).catch((error) => {
           ErrorLogger.logError('配置部署路径后更新系统信息', error, {
@@ -82,10 +83,8 @@ export default class SocketHandler {
   handleDeviceRegistered(data) {
     console.log('设备注册成功:', data)
     this.agent.reportStatus('registered')
-    // 注册后立即上报存储与回滚能力，使用服务端回传的 deployPath 或默认路径
-    const deployPath = data && data.deployPath ? data.deployPath : process.cwd()
-    this.agent.updateSystemInfoAfterRegistration(deployPath).catch((error) => {
-      ErrorLogger.logError('注册后更新系统信息', error, { deployPath })
+    this.agent.updateSystemInfoAfterRegistration().catch((error) => {
+      ErrorLogger.logError('注册后更新系统信息', error)
     })
   }
 
@@ -154,7 +153,7 @@ export default class SocketHandler {
         throw new Error('升级命令参数无效')
       }
 
-      const { project, fileName, version, deployPath } = data
+      const { project, fileName, version, deployPath, preservedPaths = [] } = data
 
       if (!project || !fileName) {
         throw new Error('升级命令缺少必需参数: project, fileName')
@@ -186,7 +185,7 @@ export default class SocketHandler {
 
       const deployResult = await this.agent
         .getDeployManager()
-        .deploy(project, downloadResult.filePath, version, deployPath, data.fileMD5 || null)
+        .deploy(project, downloadResult.filePath, version, deployPath, preservedPaths)
 
       if (!deployResult.success) {
         throw new Error(`部署失败: ${deployResult.error}`)
@@ -215,6 +214,7 @@ export default class SocketHandler {
       // 升级成功后刷新系统信息，确保回滚状态与磁盘信息更新
       const actualDeployPath = deployResult.deployPath || deployPath
       if (actualDeployPath) {
+        debugger
         this.agent.updateSystemInfoAfterRegistration(actualDeployPath).catch((error) => {
           ErrorLogger.logError('升级后更新系统信息失败', error, { deployPath: actualDeployPath })
         })
@@ -248,10 +248,16 @@ export default class SocketHandler {
         throw new Error('回滚命令参数无效')
       }
 
-      const { project } = data
+      const { project, preservedPaths } = data
 
       if (!project) {
         throw new Error('回滚命令缺少必需参数: project')
+      }
+
+      // 处理白名单参数（确保是数组）
+      const preservedPathsArray = Array.isArray(preservedPaths) ? preservedPaths : []
+      if (preservedPathsArray.length > 0) {
+        console.log(`🛡️ 回滚白名单保护: ${preservedPathsArray.join(', ')}`)
       }
 
       this.agent.reportStatus('rolling_back')
@@ -260,8 +266,8 @@ export default class SocketHandler {
         this.reportBatchTaskProgress(batchTaskId, 30, 1, 2, '正在执行回滚...')
       }
 
-      // 执行回滚
-      const rollbackResult = await this.agent.getDeployManager().rollback(project)
+      // 执行回滚（传递白名单参数）
+      const rollbackResult = await this.agent.getDeployManager().rollback(project, null, preservedPathsArray)
 
       if (!rollbackResult.success) {
         throw new Error(`回滚失败: ${rollbackResult.error}`)
@@ -286,6 +292,7 @@ export default class SocketHandler {
         (project === 'backend' ? this.agent.config.deploy.backendDir : this.agent.config.deploy.frontendDir)
 
       if (targetPath) {
+        debugger
         this.agent.updateSystemInfoAfterRegistration(targetPath).catch((error) => {
           ErrorLogger.logError('回滚后更新系统信息失败', error, { deployPath: targetPath })
         })
@@ -523,7 +530,5 @@ export default class SocketHandler {
 
     // 清理缓存的模块引用
     this.systemInfo = null
-
-    console.log('✅ SocketHandler 清理完成')
   }
 }

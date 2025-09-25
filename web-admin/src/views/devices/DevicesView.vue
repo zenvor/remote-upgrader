@@ -100,10 +100,7 @@
           <template v-else-if="column.key === 'ip'">
             <div class="text-xs text-gray-700">
               <div>
-                公网: <span class="font-mono">{{ record.publicIp || '未知' }}</span>
-              </div>
-              <div>
-                内网: <span class="font-mono">{{ record.localIp || '未知' }}</span>
+                内网IP: <span class="font-mono">{{ record.localIp || '未知' }}</span>
               </div>
             </div>
           </template>
@@ -469,7 +466,7 @@ const devicesColumns = [
   { key: 'status', dataIndex: 'status', title: '状态', width: 110 },
   { key: 'platform', dataIndex: 'platform', title: '运行平台', width: 180 },
   { key: 'network', dataIndex: 'wifiName', title: '网络信息', width: 220 },
-  { key: 'ip', dataIndex: 'publicIp', title: 'IP 信息', width: 240 },
+  { key: 'ip', dataIndex: 'localIp', title: 'IP 信息', width: 180 },
   { key: 'lastHeartbeat', dataIndex: 'lastHeartbeat', title: '最后心跳', width: 200 },
   {
     key: 'actions',
