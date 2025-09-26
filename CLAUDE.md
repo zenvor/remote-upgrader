@@ -12,6 +12,11 @@
 
 ## 通用开发规范
 
+### 用户偏好
+
+- 始终使用中文回复。
+- 始终提供中文注释。
+
 ### 代码风格
 
 - 使用中文注释
@@ -34,23 +39,6 @@
 - 接口文档位于 `server-koa/src/routes/*.js` 文件中
 - Swagger 注释应包含完整的请求/响应示例和参数说明
 - 接口变更时需确保文档准确反映实际的数据结构
-
-### 文件结构
-
-```
-remote-upgrader/
-├── server-koa/          # 后端服务
-│   ├── src/routes/      # API 路由定义
-│   ├── src/controllers/ # 控制器逻辑
-│   └── config/          # 配置文件
-├── web-admin/           # 前端管理界面
-│   ├── src/api/         # API 调用封装
-│   ├── src/views/       # 页面组件
-│   └── src/composables/ # 可复用逻辑
-└── agent-device/        # 设备端代理
-    ├── src/core/        # 核心逻辑
-    └── src/services/    # 服务模块
-```
 
 ### 后端测试规范
 
