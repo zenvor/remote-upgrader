@@ -48,10 +48,15 @@ export const upgradeDevice = (deviceId, upgradeData) => {
 }
 
 // 回滚设备（回退至上一个备份版本）
-export const rollbackDevice = (deviceId, project) => {
+export const rollbackDevice = (deviceId, projectOrOptions) => {
+  const payload =
+    projectOrOptions && typeof projectOrOptions === 'object'
+      ? projectOrOptions
+      : { project: projectOrOptions }
+
   return request.post(`/devices/${deviceId}/command`, {
     command: 'cmd:rollback',
-    data: { project }
+    data: payload
   })
 }
 
