@@ -7,6 +7,8 @@ import request from '../request.js'
  * @param {string[]} data.deviceIds - 设备ID列表
  * @param {string} data.packageFileName - 升级包文件名
  * @param {string} data.project - 项目类型 (frontend/backend)
+ * @param {string} [data.deployPath] - 自定义部署路径，可选
+ * @param {string[]} [data.preservedPaths] - 升级时需要保护的文件或目录
  * @returns {Promise<Object>} 任务创建结果
  */
 export function createBatchUpgrade(data) {

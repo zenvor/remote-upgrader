@@ -141,6 +141,16 @@ const router = new Router({
  *                 enum: [frontend, backend]
  *                 description: 项目类型
  *                 example: "frontend"
+ *               deployPath:
+ *                 type: string
+ *                 description: 自定义部署路径，留空则使用设备默认配置
+ *                 example: "/opt/apps/frontend"
+ *               preservedPaths:
+ *                 type: array
+ *                 description: 需要保护的文件或目录，升级时不会被删除
+ *                 items:
+ *                   type: string
+ *                 example: [".env", "config/", "logs/"]
  *     responses:
  *       200:
  *         description: 任务创建成功

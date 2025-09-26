@@ -27,6 +27,12 @@
           <a-descriptions-item label="项目类型">
             {{ taskDetail.config?.project === 'frontend' ? '前端' : '后端' }}
           </a-descriptions-item>
+          <a-descriptions-item v-if="taskDetail.config?.deployPath" label="部署路径">
+            {{ taskDetail.config.deployPath }}
+          </a-descriptions-item>
+          <a-descriptions-item v-if="(taskDetail.config?.preservedPaths || []).length > 0" label="保护文件">
+            {{ taskDetail.config.preservedPaths.join(', ') }}
+          </a-descriptions-item>
           <a-descriptions-item label="目标包/版本">
             {{ getTargetInfo(taskDetail) }}
           </a-descriptions-item>

@@ -79,10 +79,24 @@ export default class BatchTaskManager {
    * 创建批量升级任务
    */
   async createUpgradeTask(options) {
-    const { deviceIds, packageInfo, project, creator = 'system' } = options
+    const {
+      deviceIds,
+      packageInfo,
+      project,
+      deployPath = null,
+      preservedPaths = [],
+      creator = 'system'
+    } = options
 
     // 参数验证
     this.validateTaskOptions(options)
+
+    const safeDeployPath = typeof deployPath === 'string' && deployPath.trim().length > 0 ? deployPath.trim() : null
+    const safePreservedPaths = Array.isArray(preservedPaths)
+      ? preservedPaths
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+      : []
 
     const taskId = this.generateTaskId()
     const task = {
@@ -102,6 +116,8 @@ export default class BatchTaskManager {
           fileMD5: packageInfo.fileMD5,
           packagePath: packageInfo.packagePath
         },
+        deployPath: safeDeployPath,
+        preservedPaths: safePreservedPaths,
         totalDevices: deviceIds.length,
         batchSize: this.config.batchSize,
         timeout: this.config.deviceTimeout
@@ -133,7 +149,12 @@ export default class BatchTaskManager {
           timestamp: new Date().toISOString(),
           level: 'info',
           message: `创建批量升级任务，目标设备: ${deviceIds.length} 个，包: ${packageInfo.fileName}`,
-          details: { deviceIds, packageInfo }
+          details: {
+            deviceIds,
+            packageInfo,
+            deployPath: safeDeployPath,
+            preservedPaths: safePreservedPaths
+          }
         }
       ]
     }
@@ -332,6 +353,8 @@ export default class BatchTaskManager {
 
     let commandData
     if (task.type === TASK_TYPE.UPGRADE) {
+      const deployPath = task.config.deployPath
+      const preserved = Array.isArray(task.config.preservedPaths) ? task.config.preservedPaths : []
       commandData = {
         project: task.config.project,
         fileName: task.config.packageInfo.fileName,
@@ -339,6 +362,13 @@ export default class BatchTaskManager {
         fileMD5: task.config.packageInfo.fileMD5,
         packagePath: task.config.packageInfo.packagePath,
         batchTaskId: task.id // 添加批量任务标识
+      }
+
+      if (deployPath) {
+        commandData.deployPath = deployPath
+      }
+      if (preserved.length > 0) {
+        commandData.preservedPaths = preserved
       }
     } else {
       commandData = {
@@ -538,7 +568,7 @@ export default class BatchTaskManager {
    * 验证任务选项
    */
   validateTaskOptions(options) {
-    const { deviceIds, packageInfo, project } = options
+    const { deviceIds, packageInfo, project, deployPath, preservedPaths } = options
 
     if (!deviceIds || !Array.isArray(deviceIds) || deviceIds.length === 0) {
       throw new Error('设备ID列表不能为空')
@@ -550,6 +580,14 @@ export default class BatchTaskManager {
 
     if (!project || !['frontend', 'backend'].includes(project)) {
       throw new Error('项目类型必须是 frontend 或 backend')
+    }
+
+    if (deployPath != null && typeof deployPath !== 'string') {
+      throw new Error('部署路径必须是字符串')
+    }
+
+    if (preservedPaths != null && !Array.isArray(preservedPaths)) {
+      throw new Error('保护文件列表必须是数组')
     }
   }
 

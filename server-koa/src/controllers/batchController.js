@@ -37,7 +37,13 @@ function getBatchTaskManager() {
  */
 async function createBatchUpgrade(ctx) {
   try {
-    const { deviceIds, packageFileName, project } = ctx.request.body
+    const {
+      deviceIds,
+      packageFileName,
+      project,
+      deployPath: rawDeployPath,
+      preservedPaths: rawPreservedPaths
+    } = ctx.request.body
 
     // 参数验证
     if (!deviceIds || !Array.isArray(deviceIds) || deviceIds.length === 0) {
@@ -94,6 +100,16 @@ async function createBatchUpgrade(ctx) {
       return
     }
 
+    const deployPath = typeof rawDeployPath === 'string' && rawDeployPath.trim().length > 0
+      ? rawDeployPath.trim()
+      : null
+
+    const preservedPaths = Array.isArray(rawPreservedPaths)
+      ? rawPreservedPaths
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+      : []
+
     // 创建任务
     const taskManager = getBatchTaskManager()
     const taskId = await taskManager.createUpgradeTask({
@@ -105,6 +121,8 @@ async function createBatchUpgrade(ctx) {
         packagePath: `packages/${project}/${packageFileName}`
       },
       project,
+      deployPath,
+      preservedPaths,
       creator: ctx.state.user?.username || 'system'
     })
 
