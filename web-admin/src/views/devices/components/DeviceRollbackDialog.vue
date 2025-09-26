@@ -79,9 +79,11 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { deviceApi } from '@/api'
+import { deviceApi, batchApi } from '@/api'
 import toast from '@/utils/toast'
 import { CloudOutlined, HddOutlined } from '@ant-design/icons-vue'
+import { generateSessionId } from '@/utils/progressTypes.js'
+import { Modal } from 'ant-design-vue'
 
 // Props
 const props = defineProps({
@@ -102,30 +104,28 @@ const formData = ref({
   project: 'frontend'
 })
 
-// 回滚设备
+// 回滚设备，生成会话ID用于进度追踪
 const rollbackDevice = async (device, project) => {
   try {
-    const response = await deviceApi.rollbackDevice(device.deviceId, project)
+    const sessionId = generateSessionId()
+    console.log(`🔄 开始回滚设备 ${device.deviceName}，会话ID: ${sessionId}`)
+
+    const response = await deviceApi.rollbackDevice(device.deviceId, {
+      project,
+      sessionId
+    })
 
     if (response.success) {
       toast.success(`设备 "${device.deviceName}" 回滚命令已发送`, '回滚启动')
     }
+
+    return {
+      sessionId,
+      response
+    }
   } catch (error) {
     console.error('回滚设备失败:', error)
     toast.error(`设备回滚失败: ${error.message}`, '回滚失败')
-    throw error
-  }
-}
-
-// 批量回滚
-const batchRollback = async (deviceList, project) => {
-  const promises = deviceList.map((device) => rollbackDevice(device, project))
-
-  try {
-    await Promise.all(promises)
-    console.log(`批量回滚完成，共 ${deviceList.length} 个设备`)
-  } catch (error) {
-    console.error('批量回滚失败:', error)
     throw error
   }
 }
@@ -181,9 +181,26 @@ const deviceStatusSummary = computed(() => {
 })
 
 // 重置表单到初始状态
+const determineDefaultProject = () => {
+  const devices = targetDevices.value
+  if (!devices || devices.length === 0) return 'frontend'
+
+  // 如果有设备记录了最近的项目或部署目录，可据此选择；否则默认前端
+  const primary = devices[0]
+  if (primary?.lastUpgrade?.project && ['frontend', 'backend'].includes(primary.lastUpgrade.project)) {
+    return primary.lastUpgrade.project
+  }
+
+  if (primary?.deploy?.currentDeployPaths?.backend || primary?.backendDeployPath) {
+    return 'backend'
+  }
+
+  return 'frontend'
+}
+
 const resetForm = () => {
   formData.value = {
-    project: 'frontend'
+    project: determineDefaultProject()
   }
 }
 
@@ -199,25 +216,64 @@ watch(
   }
 )
 
-// 监听回滚类型变化，清空目标版本
-/** 提交回滚（与 @ok 绑定） */
-const handleSubmit = async () => {
-  if (!canRollback.value) return
+// 监听设备列表变化，自动调整默认项目
+watch(
+  () => targetDevices.value,
+  (devices) => {
+    if (!devices || devices.length === 0) {
+      return
+    }
 
+    const recommended = determineDefaultProject()
+    if (formData.value.project !== recommended) {
+      formData.value.project = recommended
+    }
+  },
+  { deep: true }
+)
+
+/** 提交回滚（与 @ok 绑定） */
+const performRollback = async () => {
   rolling.value = true
   try {
     const project = formData.value.project
     const target = targetDevices.value
 
     if (target.length === 1) {
-      await rollbackDevice(target[0], project)
+      const sessionResult = await rollbackDevice(target[0], project)
       toast.success(`设备 "${target[0].deviceName}" 回滚至上一版本的操作已启动`, '回滚开始')
+      emit('success', {
+        type: 'single',
+        operationType: 'rollback',
+        devices: [...target],
+        sessions: sessionResult?.sessionId
+          ? [
+              {
+                sessionId: sessionResult.sessionId,
+                deviceId: target[0].deviceId,
+                deviceName: target[0].deviceName,
+                taskId: sessionResult?.response?.taskId || null
+              }
+            ]
+          : []
+      })
     } else {
-      await batchRollback(target, project)
-      toast.success(`批量回滚操作已启动，共 ${target.length} 个设备`, '批量回滚')
-    }
+      const payload = {
+        deviceIds: target.map((device) => device.deviceId),
+        project
+      }
 
-    emit('success')
+      const response = await batchApi.createBatchRollback(payload)
+      toast.success(`批量回滚任务已创建，共 ${target.length} 个设备`, '批量回滚')
+      emit('success', {
+        type: 'batch',
+        operationType: 'rollback',
+        devices: [...target],
+        sessions: [],
+        taskId: response.taskId,
+        response
+      })
+    }
     // 关闭对话框
     open.value = false
   } catch (error) {
@@ -226,6 +282,32 @@ const handleSubmit = async () => {
   } finally {
     rolling.value = false
   }
+}
+
+const handleSubmit = async () => {
+  if (!canRollback.value) return
+
+  const target = targetDevices.value
+  const deviceCount = target?.length || 0
+  if (deviceCount === 0) {
+    toast.error('未检测到需要回滚的设备', '回滚失败')
+    return
+  }
+
+  const confirmContent =
+    deviceCount > 1
+      ? `本次将回滚 ${deviceCount} 台设备，确认继续吗？`
+      : `确定要回滚设备 "${target[0]?.deviceName || '未命名设备'}" 吗？`
+
+  Modal.confirm({
+    title: '确认回滚',
+    content: confirmContent,
+    okText: '开始回滚',
+    cancelText: '取消',
+    onOk: async () => {
+      await performRollback()
+    }
+  })
 }
 
 /** 取消并关闭弹窗 */

@@ -110,6 +110,20 @@
             <span class="text-sm text-gray-600">{{ formatDateTime(record.lastHeartbeat) }}</span>
           </template>
 
+          <!-- 进度展示列 -->
+          <template v-else-if="column.key === 'upgradeProgress'">
+            <div v-if="getDeviceProgress(record.deviceId)" class="progress-container">
+              <a-progress
+                :percent="getDeviceProgress(record.deviceId).percent"
+                :status="getDeviceProgress(record.deviceId).status"
+                size="small"
+                :show-info="false"
+              />
+              <div class="progress-text">{{ getDeviceProgress(record.deviceId).message }}</div>
+            </div>
+            <span v-else class="text-gray-400">-</span>
+          </template>
+
           <!-- 操作列 -->
           <template v-else-if="column.key === 'actions'">
             <a-space>
@@ -142,14 +156,6 @@
       </a-table>
     </a-card>
 
-    <!-- 批量操作对话框 -->
-    <BatchOperationDialog
-      v-model:open="batchOperationVisible"
-      :operation-type="batchOperationType"
-      :devices="selectedDevices"
-      @success="handleBatchOperationSuccess"
-    />
-
     <!-- 批量任务监控对话框 -->
     <BatchTaskModal v-model:open="batchTaskVisible" />
 
@@ -175,6 +181,7 @@
 <script setup>
 import { deviceApi } from '@/api'
 import OperationBar from '@/components/OperationBar.vue'
+import socketService from '@/services/socket.js'
 import toast from '@/utils/toast'
 import {
   DashboardOutlined,
@@ -185,7 +192,6 @@ import {
 } from '@ant-design/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import BatchOperationDialog from './components/BatchOperationDialog.vue'
 import BatchTaskModal from './components/BatchTaskModal.vue'
 import DeviceDetailModal from './components/DeviceDetailModal.vue'
 import DeviceQueryForm from './components/DeviceQueryForm.vue'
@@ -201,6 +207,11 @@ const onlineCount = ref(0)
 const selectedDevices = ref([])
 const loading = ref(false)
 const deviceLogs = ref([])
+
+// 设备进度状态管理，使用 reactive 保证 Map 写入后触发视图更新
+const deviceProgressMap = reactive(new Map())
+// 会话到设备的映射表，解决后端暂未返回真实设备ID的问题
+const sessionDeviceMap = reactive(new Map())
 
 // 分页状态
 const deviceDetailVisible = ref(false)
@@ -229,10 +240,6 @@ const upgradeTargetDevices = ref([])
 // 回滚对话框状态
 const rollbackDialogVisible = ref(false)
 const rollbackTargetDevices = ref([])
-
-// 批量操作对话框状态
-const batchOperationVisible = ref(false)
-const batchOperationType = ref('upgrade') // 'upgrade' 或 'rollback'
 
 // 批量任务监控状态
 const batchTaskVisible = ref(false)
@@ -330,8 +337,74 @@ const stopOfflineDetection = () => {
 
 fetchData()
 
-const handleDialogSuccess = () => {
+// 记录会话与设备的绑定关系，便于后续通过会话ID反查设备
+const registerDeviceSessions = (sessions = []) => {
+  sessions.forEach((item) => {
+    if (!item?.sessionId || !item?.deviceId) return
+    sessionDeviceMap.set(item.sessionId, {
+      deviceId: item.deviceId,
+      deviceName: item.deviceName || ''
+    })
+
+    if (!deviceProgressMap.has(item.deviceId)) {
+      updateDeviceProgress(item.deviceId, {
+        percent: 0,
+        status: 'active',
+        message: '等待进度反馈'
+      })
+    }
+  })
+}
+
+// 根据进度事件解析实际的设备ID，兼容后端返回 unknown 的场景
+const resolveProgressDeviceId = (payload) => {
+  if (!payload) return null
+  if (payload.deviceId && payload.deviceId !== 'unknown') {
+    return payload.deviceId
+  }
+
+  if (payload.sessionId && sessionDeviceMap.has(payload.sessionId)) {
+    const sessionInfo = sessionDeviceMap.get(payload.sessionId)
+    return sessionInfo?.deviceId || null
+  }
+
+  return null
+}
+
+const initializeDeviceProgress = (devicesList = [], operationType = 'upgrade') => {
+  const messageMap = {
+    upgrade: '准备开始升级',
+    rollback: '准备开始回滚'
+  }
+
+  devicesList.forEach((device) => {
+    if (!device?.deviceId) return
+    const displayMessage = messageMap[operationType] || '准备执行操作'
+
+    updateDeviceProgress(device.deviceId, {
+      percent: 0,
+      status: 'active',
+      message: displayMessage
+    })
+  })
+}
+
+const handleDialogSuccess = (payload = null) => {
+  if (payload?.devices?.length) {
+    initializeDeviceProgress(payload.devices, payload?.operationType || 'upgrade')
+  }
+
+  if (payload?.sessions?.length) {
+    registerDeviceSessions(payload.sessions)
+  }
+
   fetchData()
+
+  if (payload?.type === 'batch' && payload?.taskId) {
+    setTimeout(() => {
+      batchTaskVisible.value = true
+    }, 800)
+  }
 }
 
 // 显示设备详情对话框
@@ -343,14 +416,24 @@ const showDeviceDetails = (device) => {
 
 // 显示批量升级对话框
 const showBatchUpgradeDialog = () => {
-  batchOperationType.value = 'upgrade'
-  batchOperationVisible.value = true
+  if (!selectedDevices.value || selectedDevices.value.length === 0) {
+    toast.error('请先在列表中勾选需要升级的设备', '批量升级')
+    return
+  }
+
+  upgradeTargetDevices.value = [...selectedDevices.value]
+  upgradeDialogVisible.value = true
 }
 
 // 显示批量回滚对话框
 const showBatchRollbackDialog = () => {
-  batchOperationType.value = 'rollback'
-  batchOperationVisible.value = true
+  if (!selectedDevices.value || selectedDevices.value.length === 0) {
+    toast.error('请先在列表中勾选需要回滚的设备', '批量回滚')
+    return
+  }
+
+  rollbackTargetDevices.value = [...selectedDevices.value]
+  rollbackDialogVisible.value = true
 }
 
 // 显示批量任务监控
@@ -363,14 +446,29 @@ const goToTaskManagement = () => {
   router.push('/batch-tasks')
 }
 
-// 批量操作成功回调
-const handleBatchOperationSuccess = (response) => {
-  toast.success(`批量任务创建成功，任务ID: ${response.taskId}`, '批量操作')
-  fetchData() // 刷新设备列表
-  // 自动打开任务监控
-  setTimeout(() => {
-    batchTaskVisible.value = true
-  }, 1000)
+// 获取设备进度信息
+const getDeviceProgress = (deviceId) => {
+  const progress = deviceProgressMap.get(deviceId)
+  if (!progress) return null
+
+  return {
+    percent: progress.percent || 0,
+    status: progress.status || 'normal',
+    message: progress.message || ''
+  }
+}
+
+// 更新设备进度
+const updateDeviceProgress = (deviceId, progressData) => {
+  console.log(`💾 存储设备 ${deviceId} 进度:`, progressData)
+  const progressInfo = {
+    percent: progressData.percent || 0,
+    status: progressData.status || 'normal',
+    message: progressData.message || '',
+    timestamp: Date.now()
+  }
+  deviceProgressMap.set(deviceId, progressInfo)
+  console.log(`📋 当前进度映射大小: ${deviceProgressMap.size}`)
 }
 
 // 显示单个设备升级对话框
@@ -424,6 +522,38 @@ onMounted(async () => {
   pollingTimer = setInterval(() => {
     fetchData()
   }, 5000)
+
+  // 连接 Socket.IO 并监听进度更新
+  console.log('🔗 初始化 Socket.IO 连接')
+  socketService.connect()
+
+  socketService.onDeviceProgress((data) => {
+    console.log('📊 收到设备进度更新:', data)
+    const resolvedDeviceId = resolveProgressDeviceId(data)
+
+    if (resolvedDeviceId) {
+      if (data.sessionId && data.deviceId && data.deviceId !== 'unknown') {
+        sessionDeviceMap.set(data.sessionId, {
+          deviceId: data.deviceId,
+          deviceName: ''
+        })
+      }
+
+      const progressInfo = {
+        percent: data.progress || 0,
+        status: data.status === 'error' ? 'exception' :
+               data.status === 'completed' ? 'success' : 'active',
+        message: data.message || data.step || ''
+      }
+      console.log(`📈 更新设备 ${resolvedDeviceId} 进度:`, progressInfo)
+      updateDeviceProgress(resolvedDeviceId, progressInfo)
+    } else {
+      console.warn('⚠️ 无法解析设备ID，忽略进度更新', data)
+    }
+  })
+
+  // 加载设备数据
+  await fetchData()
 })
 
 onUnmounted(() => {
@@ -434,6 +564,10 @@ onUnmounted(() => {
     clearInterval(pollingTimer)
     pollingTimer = null
   }
+  // 断开 Socket 连接
+  socketService.disconnect()
+  // 清理本地会话映射，避免内存泄漏
+  sessionDeviceMap.clear()
 })
 
 // 格列配置与选择映射
@@ -464,17 +598,12 @@ const devicesColumns = [
   { key: 'deviceName', dataIndex: 'deviceName', title: '设备名称', width: 220, fixed: 'left' },
   { key: 'deviceId', dataIndex: 'deviceId', title: '设备ID', width: 220 },
   { key: 'status', dataIndex: 'status', title: '状态', width: 110 },
+  { key: 'upgradeProgress', title: '进度展示', align: 'center', width: 220 },
   { key: 'platform', dataIndex: 'platform', title: '运行平台', width: 180 },
   { key: 'network', dataIndex: 'wifiName', title: '网络信息', width: 220 },
   { key: 'ip', dataIndex: 'localIp', title: 'IP 信息', width: 180 },
   { key: 'lastHeartbeat', dataIndex: 'lastHeartbeat', title: '最后心跳', width: 200 },
-  {
-    key: 'actions',
-    title: '操作',
-    align: 'center',
-    width: 300,
-    fixed: 'right'
-  }
+  { key: 'actions', title: '操作', align: 'center', width: 300, fixed: 'right' }
 ]
 
 // 选择行
@@ -498,5 +627,24 @@ const handleTableChange = (pag) => {
 /* 页面容器样式保持简洁 */
 .page-container {
   padding: 24px;
+}
+
+/* 进度条样式 */
+.progress-container {
+  min-width: 120px;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.text-gray-400 {
+  color: #9ca3af;
 }
 </style>

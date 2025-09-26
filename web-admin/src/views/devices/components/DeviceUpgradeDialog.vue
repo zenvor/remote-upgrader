@@ -83,6 +83,23 @@
             <a-input v-model:value="formData.deployPath" placeholder="例如：/opt/frontend 或 /opt/backend" />
           </a-form-item>
 
+          <!-- 配置来源选择器 -->
+          <a-form-item-rest v-if="hasMultipleConfigSources">
+            <div style="margin-bottom: 8px; padding-left: 150px">
+              <a-space align="center">
+                <span style="font-size: 12px; color: #666">配置来源：</span>
+                <a-switch v-model:checked="useBackendConfig" size="small" :disabled="!hasBackendConfig">
+                  <template #checkedChildren>后端</template>
+                  <template #unCheckedChildren>环境</template>
+                </a-switch>
+                <a-tag size="small" :color="useBackendConfig ? 'blue' : 'green'">
+                  {{ useBackendConfig ? '后端配置' : '环境变量' }}
+                </a-tag>
+              </a-space>
+            </div>
+          </a-form-item-rest>
+
+          <!-- 保护文件选择 -->
           <a-form-item :disabled="!formData.packageName" label="保护文件" name="preservedPaths">
             <a-select
               v-model:value="formData.preservedPaths"
@@ -90,19 +107,28 @@
               placeholder="输入需要保护的文件或目录，避免被删除和覆盖"
               :options="commonPreservedPaths"
               style="width: 100%"
-              :max-tag-count="3"
+              :max-tag-count="20"
               allow-clear
             >
               <template #suffixIcon>
                 <SafetyOutlined />
               </template>
             </a-select>
+
             <div style="margin-top: 4px; font-size: 12px; color: #666">
               <div>
                 示例：<a-tag size="small">.env</a-tag> <a-tag size="small">config/</a-tag>
                 <a-tag size="small">logs/</a-tag>
               </div>
               <div style="margin-top: 2px">💡 白名单文件在升级时不会被删除或覆盖，确保服务正常运行</div>
+              <div
+                v-if="!hasMultipleConfigSources && preservedPathsSource && preservedPathsSource !== '无配置'"
+                style="margin-top: 2px"
+              >
+                🔧 配置来源：<a-tag size="small" :color="preservedPathsSource === '后端配置' ? 'blue' : 'green'">
+                  {{ preservedPathsSource }}
+                </a-tag>
+              </div>
             </div>
           </a-form-item>
         </a-form>
@@ -131,6 +157,13 @@ import { ref, computed, watch } from 'vue'
 import { deviceApi, packageApi } from '@/api'
 import toast from '@/utils/toast'
 import { CloudOutlined, HddOutlined, SafetyOutlined } from '@ant-design/icons-vue'
+import { generateSessionId } from '@/utils/progressTypes.js'
+import { Modal } from 'ant-design-vue'
+import {
+  resolveDevicePreservedPaths,
+  getPreservedPathsSource,
+  getEnvPreservedPaths
+} from '@/utils/deployConfig.js'
 
 // Props
 const props = defineProps({
@@ -171,17 +204,31 @@ const upgradeDevice = async (device, project, packageInfo = null, options = {}) 
       return
     }
 
-    const response = await deviceApi.upgradeDevice(device.deviceId, {
+    // 生成会话ID用于进度跟踪
+    const sessionId = generateSessionId()
+    console.log(`🚀 开始升级设备 ${device.deviceName}，会话ID: ${sessionId}`)
+
+    const upgradeData = {
       project: packageInfo.project,
       fileName: packageInfo.fileName,
       version: packageInfo.version,
       fileMD5: packageInfo.fileMD5,
       deployPath: options.deployPath || undefined,
-      preservedPaths: options.preservedPaths || []
-    })
+      preservedPaths: options.preservedPaths || [],
+      sessionId // 传递会话ID给后端
+    }
+
+    console.log('🔧 升级数据:', upgradeData)
+
+    const response = await deviceApi.upgradeDevice(device.deviceId, upgradeData)
 
     if (response.success) {
       toast.success(`设备 "${device.deviceName}" 升级命令已发送`, '升级启动')
+    }
+
+    return {
+      sessionId,
+      response
     }
   } catch (error) {
     console.error('升级设备失败:', error)
@@ -192,11 +239,25 @@ const upgradeDevice = async (device, project, packageInfo = null, options = {}) 
 
 // 批量升级
 const batchUpgrade = async (deviceList, project, packageInfo, options = {}) => {
-  const promises = deviceList.map((device) => upgradeDevice(device, project, packageInfo, options))
-
   try {
-    await Promise.all(promises)
+    const sessionResults = await Promise.all(
+      deviceList.map((device) => upgradeDevice(device, project, packageInfo, options))
+    )
+
+    const sessions = sessionResults
+      .map((result, index) => ({
+        sessionId: result?.sessionId,
+        deviceId: deviceList[index]?.deviceId,
+        deviceName: deviceList[index]?.deviceName,
+        taskId: result?.response?.taskId || null
+      }))
+      .filter((item) => item.sessionId && item.deviceId)
+
     console.log(`批量升级完成，共 ${deviceList.length} 个设备`)
+    return {
+      sessions,
+      responses: sessionResults
+    }
   } catch (error) {
     console.error('批量升级失败:', error)
     throw error
@@ -222,6 +283,9 @@ const fetchPackages = async () => {
 const loadingPackages = ref(false)
 const upgrading = ref(false)
 
+// 保护文件配置来源控制
+const useBackendConfig = ref(true) // 默认使用后端配置
+
 const resolveStoredDeployPath = (project) => {
   if (!project || targetDevices.value.length === 0) return null
   const primary = targetDevices.value[0]
@@ -238,14 +302,32 @@ const resolveStoredDeployPath = (project) => {
   return null
 }
 
-// 获取设备的白名单配置
+// 获取设备的白名单配置（支持手动切换）
 const resolveStoredPreservedPaths = (project) => {
-  if (!project || targetDevices.value.length === 0) return []
-  const primary = targetDevices.value[0]
-  if (!primary || !primary.deviceId) return []
+  if (!project) return []
 
-  const preservedPaths = primary?.preservedPaths || {}
-  return preservedPaths[project]?.paths || []
+  // 获取后端返回的保护文件配置
+  const backendPaths = resolveDevicePreservedPaths(targetDevices.value, project)
+  // 获取环境变量配置
+  const envPaths = getEnvPreservedPaths(project)
+
+  // 根据用户选择返回对应配置
+  if (useBackendConfig.value && backendPaths.length > 0) {
+    return backendPaths
+  } else if (!useBackendConfig.value && envPaths.length > 0) {
+    return envPaths
+  }
+
+  // 如果用户选择的配置源没有数据，自动切换到有数据的配置源
+  if (backendPaths.length > 0) {
+    useBackendConfig.value = true
+    return backendPaths
+  } else if (envPaths.length > 0) {
+    useBackendConfig.value = false
+    return envPaths
+  }
+
+  return []
 }
 
 // 项目选项
@@ -323,6 +405,39 @@ const deviceStatusSummary = computed(() => {
   }))
 })
 
+// 检查是否有后端配置
+const hasBackendConfig = computed(() => {
+  if (!formData.value?.project) return false
+  const backendPaths = resolveDevicePreservedPaths(targetDevices.value, formData.value.project)
+  return backendPaths.length > 0
+})
+
+// 检查是否有环境变量配置
+const hasEnvConfig = computed(() => {
+  if (!formData.value?.project) return false
+  const envPaths = getEnvPreservedPaths(formData.value.project)
+  return envPaths.length > 0
+})
+
+// 检查是否有多个配置源可选
+const hasMultipleConfigSources = computed(() => {
+  return hasBackendConfig.value && hasEnvConfig.value
+})
+
+// 保护文件配置来源
+const preservedPathsSource = computed(() => {
+  if (!formData.value?.project) return '无配置'
+
+  // 如果有切换器，根据用户选择显示
+  if (hasMultipleConfigSources.value) {
+    return useBackendConfig.value ? '后端配置' : '环境变量'
+  }
+
+  // 如果没有切换器，显示实际使用的配置源
+  const backendPaths = resolveDevicePreservedPaths(targetDevices.value, formData.value.project)
+  return getPreservedPathsSource(formData.value.project, backendPaths)
+})
+
 // 监听项目变化，清空包选择并设置默认部署路径和白名单
 watch(
   () => formData.value?.project,
@@ -330,11 +445,29 @@ watch(
     console.log('newProject: ', newProject)
     if (!formData.value) return
     formData.value.packageName = null
+
+    // 重置配置源选择为默认（后端优先）
+    useBackendConfig.value = true
+
     const storedPath = resolveStoredDeployPath(newProject)
     const storedPreservedPaths = resolveStoredPreservedPaths(newProject)
+
     // 为不同项目设置默认路径和白名单，优先使用已记录的配置
     formData.value.deployPath = storedPath || null
     formData.value.preservedPaths = storedPreservedPaths || []
+  }
+)
+
+// 监听配置源切换，自动更新保护文件
+watch(
+  () => useBackendConfig.value,
+  () => {
+    if (!formData.value?.project) return
+
+    const newPreservedPaths = resolveStoredPreservedPaths(formData.value.project)
+    formData.value.preservedPaths = newPreservedPaths || []
+
+    console.log(`切换到${useBackendConfig.value ? '后端' : '环境变量'}配置:`, newPreservedPaths)
   }
 )
 
@@ -358,6 +491,10 @@ watch(
 // 重置表单到初始状态
 const resetForm = () => {
   const defaultProject = 'frontend'
+
+  // 重置配置源选择为默认（后端优先）
+  useBackendConfig.value = true
+
   formData.value = {
     project: defaultProject,
     packageName: null,
@@ -394,16 +531,10 @@ watch(
 )
 
 // 方法
-/** 提交升级（与 @ok 绑定） */
-const handleSubmit = async () => {
+/** 实际执行升级逻辑 */
+const performUpgrade = async () => {
   try {
-    await upgradeFormRef.value.validate()
-  } catch (error) {
-    return console.error('表单校验失败:', error)
-  }
-
-  upgrading.value = true
-  try {
+    upgrading.value = true
     const project = formData.value.project
     const packageInfo = selectedPackageInfo.value
     const options = { ...(formData.value.options || {}) }
@@ -421,15 +552,44 @@ const handleSubmit = async () => {
     }
     const target = targetDevices.value
 
+    let successPayload = null
+
     if (target.length === 1) {
-      await upgradeDevice(target[0], project, packageInfo, options)
+      const sessionResult = await upgradeDevice(target[0], project, packageInfo, options)
       toast.success(`设备 "${target[0].deviceName}" 升级操作已启动`, '升级开始')
+
+      successPayload = {
+        type: 'single',
+        operationType: 'upgrade',
+        devices: [...target],
+        sessions: sessionResult?.sessionId
+          ? [
+              {
+                sessionId: sessionResult.sessionId,
+                deviceId: target[0].deviceId,
+                deviceName: target[0].deviceName,
+                taskId: sessionResult?.response?.taskId || null
+              }
+            ]
+          : []
+      }
     } else {
-      await batchUpgrade(target, project, packageInfo, options)
+      const { sessions, responses } = await batchUpgrade(target, project, packageInfo, options)
       toast.success(`批量升级操作已启动，共 ${target.length} 个设备`, '批量升级')
+
+      successPayload = {
+        type: 'batch',
+        operationType: 'upgrade',
+        devices: [...target],
+        sessions,
+        taskId:
+          sessions.find((item) => item.taskId)?.taskId ||
+          responses?.find((item) => item?.response?.taskId)?.response?.taskId ||
+          null
+      }
     }
 
-    emit('success')
+    emit('success', successPayload)
     // 关闭对话框
     open.value = false
   } catch (error) {
@@ -438,6 +598,31 @@ const handleSubmit = async () => {
   } finally {
     upgrading.value = false
   }
+}
+
+/** 提交升级（与 @ok 绑定） */
+const handleSubmit = async () => {
+  try {
+    await upgradeFormRef.value.validate()
+  } catch (error) {
+    return console.error('表单校验失败:', error)
+  }
+
+  const deviceCount = targetDevices.value.length
+  const confirmContent =
+    deviceCount > 1
+      ? `确定要开始升级这 ${deviceCount} 台设备吗？`
+      : `确定要开始升级设备 "${targetDevices.value[0]?.deviceName || '未命名设备'}" 吗？`
+
+  Modal.confirm({
+    title: '确认升级',
+    content: confirmContent,
+    okText: '开始升级',
+    cancelText: '取消',
+    onOk: async () => {
+      await performUpgrade()
+    }
+  })
 }
 
 /** 取消并关闭弹窗 */
