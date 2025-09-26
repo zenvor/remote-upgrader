@@ -45,7 +45,7 @@ export default class DownloadManager {
     return path.split('.').reduce((current, key) => current?.[key], obj)
   }
 
-  async downloadPackage(project, fileName) {
+  async downloadPackage(project, fileName, progressCallback = null) {
     // 参数验证
     if (!project || !fileName) {
       throw new Error('project 和 fileName 参数不能为空')
@@ -54,6 +54,11 @@ export default class DownloadManager {
     console.log(`开始下载包: ${project}/${fileName}`)
 
     try {
+      // 报告开始下载进度
+      if (progressCallback) {
+        progressCallback('downloading', 0, '获取包信息...')
+      }
+
       // 1. 获取包信息
       const packageInfo = await this.getPackageInfo(project, fileName)
       if (!packageInfo) {
@@ -66,6 +71,9 @@ export default class DownloadManager {
       const expectedMd5 = packageInfo.fileMD5
       if (await this.isFileComplete(targetPath, expectedMd5)) {
         console.log('文件已存在且完整，跳过下载')
+        if (progressCallback) {
+          progressCallback('downloading', 100, '文件已存在，跳过下载')
+        }
         return {
           success: true,
           filePath: targetPath,
@@ -73,12 +81,19 @@ export default class DownloadManager {
         }
       }
 
+      if (progressCallback) {
+        progressCallback('downloading', 10, '开始下载升级包...')
+      }
+
       // 3. 执行断点续传下载
-      const downloadResult = await this.downloadWithResume(project, fileName, packageInfo, targetPath)
+      const downloadResult = await this.downloadWithResume(project, fileName, packageInfo, targetPath, progressCallback)
 
       return downloadResult
     } catch (error) {
       ErrorLogger.logError('下载失败', error, { project, fileName })
+      if (progressCallback) {
+        progressCallback('downloading', 100, `下载失败: ${error.message}`, error)
+      }
       return {
         success: false,
         error: error.message
@@ -108,7 +123,7 @@ export default class DownloadManager {
     }
   }
 
-  async downloadWithResume(project, fileName, packageInfo, targetPath) {
+  async downloadWithResume(project, fileName, packageInfo, targetPath, progressCallback = null) {
     console.log('开始断点续传下载...')
 
     const temporaryPath = path.join(this.tempDir, `${project}-${fileName}`)
@@ -164,14 +179,20 @@ export default class DownloadManager {
           // 限制进度更新频率
           const now = Date.now()
           if (now - lastProgressTime > this.constants.progressUpdateInterval) {
-            const progress = ((receivedBytes / totalBytes) * 100).toFixed(1)
-            process.stdout.write(`\r下载进度: ${progress}% (${receivedBytes}/${totalBytes} bytes)`)
+            const progress = Math.min(90, Math.max(10, ((receivedBytes / totalBytes) * 80) + 10)) // 10-90% 范围，为验证预留进度
+            if (progressCallback) {
+              progressCallback('downloading', progress, `下载中... ${(receivedBytes / (1024 * 1024)).toFixed(1)}MB/${(totalBytes / (1024 * 1024)).toFixed(1)}MB`)
+            }
+            process.stdout.write(`\r下载进度: ${progress.toFixed(1)}% (${receivedBytes}/${totalBytes} bytes)`)
             lastProgressTime = now
           }
         })
 
         writeStream.on('finish', async () => {
           console.log('\n下载完成，验证文件完整性...')
+          if (progressCallback) {
+            progressCallback('downloading', 90, '验证文件完整性...')
+          }
 
           try {
             // 验证 MD5
@@ -185,6 +206,9 @@ export default class DownloadManager {
             await fs.move(temporaryPath, targetPath, { overwrite: true })
 
             console.log('文件下载并验证成功')
+            if (progressCallback) {
+              progressCallback('downloading', 100, '下载完成')
+            }
             resolve({
               success: true,
               filePath: targetPath,

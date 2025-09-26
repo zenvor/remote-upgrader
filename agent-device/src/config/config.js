@@ -37,7 +37,7 @@ export default {
     frontendDir: './deployed/frontend', // 前端部署目录
     backendDir: './deployed/backend', // 后端部署目录
     backupDir: './backup', // 备份目录
-    maxBackups: 5 // 最大备份数量
+    maxBackups: 10 // 最大备份数量
   },
 
   // 日志配置

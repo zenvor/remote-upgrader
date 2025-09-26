@@ -59,7 +59,6 @@ export default class SocketHandler {
 
     // 服务端配置推送：deployPath 更新后立刻触发一次 storage 检测并上报
     this.socket.on('config:deploy-path', (data) => {
-      debugger
       if (data && data.deployPath) {
         this.agent.updateSystemInfoAfterRegistration(data.deployPath).catch((error) => {
           ErrorLogger.logError('配置部署路径后更新系统信息', error, {
@@ -146,6 +145,8 @@ export default class SocketHandler {
 
     const commandId = messageId || data?.commandId || null
     const batchTaskId = data?.batchTaskId || null // 批量任务ID
+    let sessionId = null // 在函数顶部声明，确保在 catch 块中可见
+    const deviceId = this.agent?.config?.device?.id || 'unknown'
 
     try {
       // 参数验证
@@ -154,9 +155,31 @@ export default class SocketHandler {
       }
 
       const { project, fileName, version, deployPath, preservedPaths = [] } = data
+      sessionId = data.sessionId // 赋值给外层变量
 
       if (!project || !fileName) {
         throw new Error('升级命令缺少必需参数: project, fileName')
+      }
+
+      // 如果有 sessionId，设置进度回调
+      if (sessionId) {
+        console.log(`🔗 设置进度回调: ${sessionId}`)
+        const deployManager = this.agent.getDeployManager()
+
+        // 注册进度回调，用于实时进度更新
+        deployManager.registerProgressCallback(sessionId, (progressUpdate) => {
+          this.socket.emit('device:operation_progress', progressUpdate)
+        })
+
+        // 上报操作开始事件
+        this.socket.emit('device:operation_start', {
+          sessionId,
+          deviceId,
+          operationType: 'upgrade',
+          project,
+          version: version || null,
+          timestamp: new Date().toISOString()
+        })
       }
 
       // 报告状态（包括批量任务状态）
@@ -171,7 +194,16 @@ export default class SocketHandler {
         this.reportBatchTaskProgress(batchTaskId, 20, 1, 3, '正在下载升级包...')
       }
 
-      const downloadResult = await this.agent.getDownloadManager().downloadPackage(project, fileName)
+      // 创建下载进度回调
+      const downloadProgressCallback = (step, progress, message, error = null) => {
+        if (sessionId && this.agent.getDeployManager()) {
+          this.agent.getDeployManager().emitProgress(sessionId, step, progress, message, error)
+        }
+      }
+
+      const downloadResult = await this.agent
+        .getDownloadManager()
+        .downloadPackage(project, fileName, downloadProgressCallback)
 
       if (!downloadResult.success) {
         throw new Error(`下载失败: ${downloadResult.error}`)
@@ -185,7 +217,7 @@ export default class SocketHandler {
 
       const deployResult = await this.agent
         .getDeployManager()
-        .deploy(project, downloadResult.filePath, version, deployPath, preservedPaths)
+        .deploy(project, downloadResult.filePath, version, deployPath, preservedPaths, sessionId)
 
       if (!deployResult.success) {
         throw new Error(`部署失败: ${deployResult.error}`)
@@ -194,6 +226,12 @@ export default class SocketHandler {
       this.agent.reportStatus('upgrade_success')
       if (batchTaskId) {
         this.reportBatchTaskStatus(batchTaskId, 'success', null, 100)
+      }
+
+      // 清理进度回调
+      if (sessionId) {
+        console.log(`🧹 清理进度回调: ${sessionId}`)
+        this.agent.getDeployManager().removeProgressCallback(sessionId)
       }
 
       if (commandId) {
@@ -214,7 +252,6 @@ export default class SocketHandler {
       // 升级成功后刷新系统信息，确保回滚状态与磁盘信息更新
       const actualDeployPath = deployResult.deployPath || deployPath
       if (actualDeployPath) {
-        debugger
         this.agent.updateSystemInfoAfterRegistration(actualDeployPath).catch((error) => {
           ErrorLogger.logError('升级后更新系统信息失败', error, { deployPath: actualDeployPath })
         })
@@ -224,6 +261,12 @@ export default class SocketHandler {
     } catch (error) {
       ErrorLogger.logError('升级失败', error, { project: data.project, commandId, batchTaskId })
       this.agent.reportStatus('upgrade_failed')
+
+      // 清理进度回调（错误情况下）
+      if (sessionId) {
+        console.log(`🧹 清理进度回调（错误）: ${sessionId}`)
+        this.agent.getDeployManager().removeProgressCallback(sessionId)
+      }
 
       // 报告批量任务失败状态
       if (batchTaskId) {
@@ -241,23 +284,44 @@ export default class SocketHandler {
 
     const commandId = messageId || data?.commandId || null
     const batchTaskId = data?.batchTaskId || null // 批量任务ID
+    const deviceId = this.agent?.config?.device?.id || 'unknown'
+
+    // 参数验证
+    if (!data || typeof data !== 'object') {
+      throw new Error('回滚命令参数无效')
+    }
+
+    const { project, preservedPaths } = data
+
+    if (!project) {
+      throw new Error('回滚命令缺少必需参数: project')
+    }
+
+    const preservedPathsArray = Array.isArray(preservedPaths) ? preservedPaths : []
+    if (preservedPathsArray.length > 0) {
+      console.log(`🛡️ 回滚白名单保护: ${preservedPathsArray.join(', ')}`)
+    }
+
+    const sessionId = data?.sessionId || null
+    if (!sessionId) {
+      console.warn('⚠️ 回滚命令未提供 sessionId，无法上报精确进度')
+    }
 
     try {
-      // 参数验证
-      if (!data || typeof data !== 'object') {
-        throw new Error('回滚命令参数无效')
-      }
+      if (sessionId) {
+        console.log(`🔗 设置回滚进度回调: ${sessionId}`)
+        const deployManager = this.agent.getDeployManager()
+        deployManager.registerProgressCallback(sessionId, (progressUpdate) => {
+          this.socket.emit('device:operation_progress', progressUpdate)
+        })
 
-      const { project, preservedPaths } = data
-
-      if (!project) {
-        throw new Error('回滚命令缺少必需参数: project')
-      }
-
-      // 处理白名单参数（确保是数组）
-      const preservedPathsArray = Array.isArray(preservedPaths) ? preservedPaths : []
-      if (preservedPathsArray.length > 0) {
-        console.log(`🛡️ 回滚白名单保护: ${preservedPathsArray.join(', ')}`)
+        this.socket.emit('device:operation_start', {
+          sessionId,
+          deviceId,
+          operationType: 'rollback',
+          project,
+          timestamp: new Date().toISOString()
+        })
       }
 
       this.agent.reportStatus('rolling_back')
@@ -266,8 +330,7 @@ export default class SocketHandler {
         this.reportBatchTaskProgress(batchTaskId, 30, 1, 2, '正在执行回滚...')
       }
 
-      // 执行回滚（传递白名单参数）
-      const rollbackResult = await this.agent.getDeployManager().rollback(project, null, preservedPathsArray)
+      const rollbackResult = await this.agent.getDeployManager().rollback(project, null, preservedPathsArray, sessionId)
 
       if (!rollbackResult.success) {
         throw new Error(`回滚失败: ${rollbackResult.error}`)
@@ -286,13 +349,11 @@ export default class SocketHandler {
         })
       }
 
-      // 回滚完成后，同步刷新系统信息
       const targetPath =
         rollbackResult.deployPath ||
         (project === 'backend' ? this.agent.config.deploy.backendDir : this.agent.config.deploy.frontendDir)
 
       if (targetPath) {
-        debugger
         this.agent.updateSystemInfoAfterRegistration(targetPath).catch((error) => {
           ErrorLogger.logError('回滚后更新系统信息失败', error, { deployPath: targetPath })
         })
@@ -303,13 +364,17 @@ export default class SocketHandler {
       ErrorLogger.logError('回滚失败', error, { project: data.project, commandId, batchTaskId })
       this.agent.reportStatus('rollback_failed')
 
-      // 报告批量任务失败状态
       if (batchTaskId) {
         this.reportBatchTaskStatus(batchTaskId, 'failed', error.message)
       }
 
       if (commandId) {
         this.sendCommandResult(commandId, false, error.message)
+      }
+    } finally {
+      if (sessionId) {
+        console.log(`🧹 清理回滚进度回调: ${sessionId}`)
+        this.agent.getDeployManager().removeProgressCallback(sessionId)
       }
     }
   }

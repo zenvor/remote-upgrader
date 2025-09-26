@@ -3,6 +3,7 @@ import AdmZip from 'adm-zip'
 import fs from 'fs-extra'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import { PROGRESS_STEPS, createProgressUpdate } from '../constants/progress.js'
 import { BackupHelper, DateHelper, DeployResult, ErrorLogger, FileHelper, VersionHelper } from '../utils/common.js'
 import { defaultPathValidator } from '../utils/pathValidator.js'
 
@@ -15,6 +16,10 @@ export default class DeployManager {
 
     this.config = config
     this.agent = agent // 添加 agent 引用用于通信
+
+    // 进度回调管理
+    this.progressCallbacks = new Map()
+    this.currentSessions = new Map()
 
     // 常量配置
     this.constants = {
@@ -69,7 +74,79 @@ export default class DeployManager {
     }
   }
 
-  async deploy(project, packagePath, version, deployPathOverride = null, preservedPaths = []) {
+  /**
+   * 注册进度回调
+   * @param {string} sessionId - 会话ID
+   * @param {Function} callback - 进度回调函数
+   */
+  registerProgressCallback(sessionId, callback) {
+    if (!sessionId || typeof callback !== 'function') {
+      throw new Error('sessionId 和 callback 参数必须有效')
+    }
+    this.progressCallbacks.set(sessionId, callback)
+    console.log(`📊 注册进度回调: ${sessionId}`)
+  }
+
+  /**
+   * 移除进度回调
+   * @param {string} sessionId - 会话ID
+   */
+  removeProgressCallback(sessionId) {
+    this.progressCallbacks.delete(sessionId)
+    this.currentSessions.delete(sessionId)
+    console.log(`🗑️ 移除进度回调: ${sessionId}`)
+  }
+
+  /**
+   * 发送进度更新
+   * @param {string} sessionId - 会话ID
+   * @param {string} step - 当前步骤
+   * @param {number} progress - 进度百分比 (0-100)
+   * @param {string} message - 进度消息
+   * @param {Error|null} error - 错误信息
+   * @param {Object} metadata - 额外元数据
+   */
+  emitProgress(sessionId, step, progress = 0, message = '', error = null, metadata = {}) {
+    if (!sessionId) return
+
+    const callback = this.progressCallbacks.get(sessionId)
+    if (!callback) return
+
+    const deviceId =
+      this.agent?.config?.device?.id ||
+      this.agent?.config?.deviceId ||
+      this.agent?.deviceId ||
+      'unknown'
+
+    const mergedMetadata = { ...(metadata || {}) }
+    const status = mergedMetadata.status || (error ? 'error' : 'running')
+
+    const progressUpdate = createProgressUpdate({
+      sessionId,
+      deviceId,
+      step,
+      progress,
+      message,
+      status,
+      error,
+      metadata: mergedMetadata
+    })
+
+    // 更新当前会话状态
+    this.currentSessions.set(sessionId, {
+      ...progressUpdate,
+      startTime: this.currentSessions.get(sessionId)?.startTime || new Date().toISOString()
+    })
+
+    try {
+      callback(progressUpdate)
+      console.log(`📊 进度更新 [${sessionId}]: ${step} - ${progress}% - ${message}`)
+    } catch (err) {
+      console.error('进度回调执行失败:', err)
+    }
+  }
+
+  async deploy(project, packagePath, version, deployPathOverride = null, preservedPaths = [], sessionId = null) {
     // 参数验证
     if (!project || !packagePath) {
       throw new Error('project 和 packagePath 参数不能为空')
@@ -78,6 +155,14 @@ export default class DeployManager {
       throw new Error('project 必须是 frontend 或 backend')
     }
     console.log(`开始部署 ${project} 包: ${packagePath}`)
+
+    const operationType = 'upgrade'
+    const progressMeta = (extra = {}) => ({ operationType, ...extra })
+
+    // 初始化进度会话
+    if (sessionId) {
+      this.emitProgress(sessionId, PROGRESS_STEPS.PREPARING, 0, '开始部署流程', null, progressMeta())
+    }
 
     try {
       const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
@@ -98,22 +183,65 @@ export default class DeployManager {
 
       console.log(`✅ 使用安全验证后的部署路径: ${targetDir}`)
 
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.PREPARING,
+          20,
+          '环境检查完成，开始备份',
+          null,
+          progressMeta()
+        )
+      }
+
       // 1. 先备份当前运行的旧版本（如果存在）
       console.log(`🔄 检查并备份当前版本...`)
-      const backupResult = await this.backupCurrentVersion(project, targetDir)
+      const backupResult = await this.backupCurrentVersion(project, targetDir, sessionId, preservedPaths)
+
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.DOWNLOADING,
+          40,
+          '备份完成，开始解压部署包',
+          null,
+          progressMeta()
+        )
+      }
 
       // 2. 解压和部署新版本
       console.log(`🔄 开始部署新版本 ${version}...`)
       if (preservedPaths.length > 0) {
         console.log(`🛡️ 启用白名单保护，保护路径: ${preservedPaths.join(', ')}`)
       }
-      const deployResult = await this.extractAndDeploy(packagePath, targetDir, project, preservedPaths)
+      const deployResult = await this.extractAndDeploy(packagePath, targetDir, project, preservedPaths, sessionId)
 
       if (!deployResult.success) {
         // 部署失败，尝试恢复备份
         console.log('❌ 部署失败，恢复旧版本...')
+        if (sessionId) {
+          this.emitProgress(
+            sessionId,
+            PROGRESS_STEPS.FAILED,
+            40,
+            '部署失败，正在恢复备份',
+            new Error(deployResult.error),
+            progressMeta({ status: 'error' })
+          )
+        }
         await this.restoreBackup(project)
         throw new Error(deployResult.error)
+      }
+
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.VERIFYING,
+          85,
+          '部署完成，更新版本信息',
+          null,
+          progressMeta()
+        )
       }
 
       // 3. 更新版本信息
@@ -122,9 +250,31 @@ export default class DeployManager {
       // 4. 更新部署路径配置
       await this.updateDeployPathConfig(project, targetDir, version)
 
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.CLEANING,
+          95,
+          '清理临时文件',
+          null,
+          progressMeta()
+        )
+      }
+
       // 5. 可选清理旧备份（默认保留所有备份）
       if (this.maxBackups && this.maxBackups > 0) {
         await this.cleanupOldBackups(project)
+      }
+
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.COMPLETED,
+          100,
+          '部署成功完成',
+          null,
+          progressMeta({ status: 'completed' })
+        )
       }
 
       ErrorLogger.logSuccess('部署', { project, version })
@@ -135,6 +285,16 @@ export default class DeployManager {
       })
     } catch (error) {
       ErrorLogger.logError('部署', error, { project, version, packagePath })
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.FAILED,
+          100,
+          error?.message || '部署失败',
+          error,
+          progressMeta({ status: 'error' })
+        )
+      }
       return DeployResult.error(error)
     }
   }
@@ -142,13 +302,33 @@ export default class DeployManager {
   /**
    * 备份当前运行的版本（在部署新版本之前）
    */
-  async backupCurrentVersion(project, targetDir) {
+  async backupCurrentVersion(project, targetDir, sessionId = null, preservedPaths = []) {
     try {
+      const progressMeta = (extra = {}) => ({ operationType: 'upgrade', ...extra })
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 0, '检查当前版本', null, progressMeta())
+      }
+
       // 检查目标目录是否有内容
       const hasExisting = await this.hasContent(targetDir)
       if (!hasExisting) {
         console.log(`ℹ️ 部署目录为空，跳过备份: ${targetDir}`)
+        if (sessionId) {
+          this.emitProgress(
+            sessionId,
+            PROGRESS_STEPS.BACKUP,
+            100,
+            '目录为空，跳过备份',
+            null,
+            progressMeta({ status: 'completed' })
+          )
+        }
         return { success: false, reason: 'target_empty' }
+      }
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 20, '读取当前版本信息', null, progressMeta())
       }
 
       // 获取当前版本信息（如果有）
@@ -164,9 +344,14 @@ export default class DeployManager {
       }
 
       // 生成带时间戳的备份目录名
-      const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-')
+      const now = new Date()
+      const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`
       const backupName = `${project}-backup-${timestamp}-from-${currentVersion}`
       const backupPath = path.join(this.backupDir, backupName)
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 40, '清理旧备份链接', null, progressMeta())
+      }
 
       // 删除旧的最新备份链接（如果存在）
       const latestBackupLink = path.join(this.backupDir, `${project}-latest`)
@@ -175,12 +360,26 @@ export default class DeployManager {
         console.log(`♻️ 已移除旧备份: ${project}-latest`)
       }
 
-      // 创建新备份
-      await fs.copy(targetDir, backupPath)
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 60, '备份当前版本文件', null, progressMeta())
+      }
+
+      // 创建新备份（忽略保护白名单文件，因为它们不会被替换）
+      if (preservedPaths.length > 0) {
+        console.log(`🛡️ 备份时将忽略保护白名单文件: ${preservedPaths.join(', ')}`)
+        await this.copyWithBackupExclusion(targetDir, backupPath, preservedPaths)
+      } else {
+        // 没有白名单，使用标准复制
+        await fs.copy(targetDir, backupPath)
+      }
       console.log(`📦 已备份旧版本: ${backupName}`)
 
-      // 创建新的最新备份链接
-      await fs.copy(backupPath, latestBackupLink)
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 90, '创建备份链接', null, progressMeta())
+      }
+
+      // 创建新的最新备份链接（使用软链接）
+      await this.createBackupSymlink(backupPath, latestBackupLink, `${project}-latest`)
       console.log(`🔗 已更新最新备份链接: ${project}-latest`)
 
       // 记录备份信息
@@ -194,6 +393,10 @@ export default class DeployManager {
         type: 'pre-deployment-backup'
       }
       await FileHelper.safeWriteJson(path.join(backupPath, 'backup-info.json'), backupInfo)
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 100, '备份完成', null, progressMeta({ status: 'completed' }))
+      }
 
       return {
         success: true,
@@ -220,6 +423,77 @@ export default class DeployManager {
       return files.some((f) => !f.startsWith('.'))
     } catch {
       return false
+    }
+  }
+
+  /**
+   * 创建备份符号链接（跨平台支持）
+   * @param {string} targetPath - 目标路径（备份目录）
+   * @param {string} linkPath - 符号链接路径
+   * @param {string} linkName - 链接名称（用于日志）
+   */
+  async createBackupSymlink(targetPath, linkPath, linkName) {
+    try {
+      // 统一转换为绝对路径，避免符号链接解析出错
+      const absoluteTargetPath = path.isAbsolute(targetPath)
+        ? targetPath
+        : path.resolve(targetPath)
+
+      // 检查目标路径是否存在
+      if (!(await fs.pathExists(absoluteTargetPath))) {
+        throw new Error(`目标备份路径不存在: ${absoluteTargetPath}`)
+      }
+
+      // 删除旧的链接（如果存在）
+      if (await fs.pathExists(linkPath)) {
+        await fs.remove(linkPath)
+        console.log(`♻️ 删除旧的备份链接: ${linkName}`)
+      }
+
+      try {
+        // 尝试创建符号链接
+        await fs.symlink(absoluteTargetPath, linkPath, 'junction')
+        console.log(`🔗 创建符号链接成功: ${linkName} -> ${path.basename(absoluteTargetPath)}`)
+
+        // 验证符号链接是否成功创建
+        const linkStats = await fs.lstat(linkPath)
+        if (linkStats.isSymbolicLink()) {
+          console.log(`✅ 符号链接验证成功`)
+          return { success: true, method: 'symlink' }
+        }
+      } catch (symlinkError) {
+        console.warn(`⚠️ 符号链接创建失败: ${symlinkError.message}`)
+
+        // Windows 特定的符号链接尝试
+        if (process.platform === 'win32') {
+          try {
+            // 在 Windows 上尝试目录连接
+            await fs.symlink(absoluteTargetPath, linkPath, 'dir')
+            console.log(`🔗 Windows 目录符号链接成功: ${linkName}`)
+
+            const linkStats = await fs.lstat(linkPath)
+            if (linkStats.isSymbolicLink()) {
+              return { success: true, method: 'windows-dir-symlink' }
+            }
+          } catch (winSymlinkError) {
+            console.warn(`⚠️ Windows 目录符号链接失败: ${winSymlinkError.message}`)
+          }
+        }
+
+        // 符号链接失败，回退到硬拷贝（保持原有行为）
+        console.log(`📂 回退到文件复制模式: ${linkName}`)
+        await fs.copy(absoluteTargetPath, linkPath)
+        console.log(`✅ 文件复制完成: ${linkName}`)
+        return { success: true, method: 'copy' }
+      }
+    } catch (error) {
+      ErrorLogger.logError('创建备份符号链接失败', error, {
+        targetPath,
+        absoluteTargetPath: path.isAbsolute(targetPath) ? targetPath : path.resolve(targetPath),
+        linkPath,
+        linkName
+      })
+      throw new Error(`无法创建备份链接 ${linkName}: ${error.message}`)
     }
   }
 
@@ -260,8 +534,8 @@ export default class DeployManager {
           await fs.remove(latestBackupLink)
         }
 
-        // 创建新的最新备份（复制，不是链接，以保证跨平台兼容性）
-        await fs.copy(backupPath, latestBackupLink)
+        // 创建新的最新备份链接（使用软链接）
+        await this.createBackupSymlink(backupPath, latestBackupLink, `${project}-latest`)
         console.log(`🔗 已更新最新备份链接: ${project}-latest`)
 
         return { success: true, backupPath, backupName }
@@ -275,21 +549,35 @@ export default class DeployManager {
     }
   }
 
-  async extractAndDeploy(packagePath, targetDir, project, preservedPaths = []) {
+  async extractAndDeploy(packagePath, targetDir, project, preservedPaths = [], sessionId = null) {
     // 参数验证
     if (!packagePath || !targetDir || !project) {
       throw new Error('packagePath, targetDir 和 project 参数不能为空')
     }
     try {
+      const progressMeta = (extra = {}) => ({ operationType: 'upgrade', ...extra })
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.EXTRACTING, 0, '准备目标目录', null, progressMeta())
+      }
+
       // 准备目标目录（使用通用方法）
-      await this.prepareTargetDirectory(targetDir, preservedPaths, '部署')
+      const prepareProgressCallback = sessionId ? (step, progress, message) => {
+        this.emitProgress(sessionId, step, progress, message, null, progressMeta())
+      } : null
+
+      await this.prepareTargetDirectory(targetDir, preservedPaths, '部署', prepareProgressCallback)
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.EXTRACTING, 20, '开始解压部署包', null, progressMeta())
+      }
 
       // 检查包文件类型
       const ext = path.extname(packagePath).toLowerCase()
 
       let extractResult
       if (ext === '.zip') {
-        extractResult = await this.extractZip(packagePath, targetDir, preservedPaths)
+        extractResult = await this.extractZip(packagePath, targetDir, preservedPaths, sessionId)
       } else if (ext === '.tar' || ext === '.tgz' || ext === '.gz') {
         throw new Error(`不支持的压缩格式: ${ext}。仅支持 ZIP 格式，请重新打包为 ZIP 文件。`)
       } else {
@@ -305,6 +593,10 @@ export default class DeployManager {
           console.log(`🛡️ 跳过白名单保护文件: ${fileName}`)
           extractResult = DeployResult.success('文件复制完成（跳过白名单文件）')
         }
+      }
+
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.DEPLOYING, 80, '解压完成，验证结果', null, progressMeta())
       }
 
       // 解压完成后验证
@@ -379,6 +671,7 @@ export default class DeployManager {
         let extractedCount = 0
         let skippedCount = 0
         const skippedFiles = []
+        const loggedWhitelistEntries = new Set()
 
         for (const entry of zipEntries) {
           const entryPath = entry.entryName
@@ -387,7 +680,11 @@ export default class DeployManager {
           if (this.isPathPreserved(entryPath, preservedPaths)) {
             skippedCount++
             skippedFiles.push(entryPath)
-            console.log(`🛡️ 跳过白名单文件: ${entryPath}`)
+            const topLevelEntry = this.getTopLevelEntry(entryPath)
+            if (!loggedWhitelistEntries.has(topLevelEntry)) {
+              console.log(`🛡️ 跳过白名单路径: ${topLevelEntry}`)
+              loggedWhitelistEntries.add(topLevelEntry)
+            }
             continue
           }
 
@@ -588,11 +885,14 @@ export default class DeployManager {
    * @param {string} targetDir - 目标目录
    * @param {Array} preservedPaths - 白名单路径，这些文件/目录不会被删除
    */
-  async ensureDirectoryEmpty(targetDir, preservedPaths = []) {
+  async ensureDirectoryEmpty(targetDir, preservedPaths = [], progressCallback = null) {
     try {
       if (preservedPaths.length === 0) {
         // 没有白名单，使用原有的快速清空方法
         console.log(`🔧 方法1：使用 fs.emptyDir 清空目录...`)
+        if (progressCallback) {
+          progressCallback(20, '清理目录文件...')
+        }
         await fs.emptyDir(targetDir)
         console.log(`✅ fs.emptyDir 执行完成`)
 
@@ -602,9 +902,16 @@ export default class DeployManager {
 
         if (afterFiles.length > 0) {
           console.warn(`⚠️ fs.emptyDir 未完全清空，剩余文件: ${afterFiles.join(', ')}`)
+          if (progressCallback) {
+            progressCallback(60, '清理剩余文件...')
+          }
           await this.forceEmptyDirectory(targetDir, afterFiles)
         } else {
           console.log(`✅ 目标目录清空成功`)
+        }
+
+        if (progressCallback) {
+          progressCallback(100, '目录清理完成')
         }
         return
       }
@@ -612,6 +919,10 @@ export default class DeployManager {
       // 有白名单，使用选择性删除
       console.log(`🛡️ 使用白名单保护模式清空目录...`)
       console.log(`🛡️ 保护路径: ${preservedPaths.join(', ')}`)
+
+      if (progressCallback) {
+        progressCallback(10, '分析目录内容...')
+      }
 
       const allFiles = await fs.readdir(targetDir)
       console.log(`📁 目录总文件数: ${allFiles.length}`)
@@ -635,7 +946,12 @@ export default class DeployManager {
         console.log(`🛡️ 保护的文件/目录: ${preservedFiles.join(', ')}`)
       }
 
+      if (progressCallback) {
+        progressCallback(30, `删除 ${filesToDelete.length} 个文件...`)
+      }
+
       // 删除非白名单文件
+      let deletedCount = 0
       for (const file of filesToDelete) {
         const filePath = path.join(targetDir, file)
         try {
@@ -644,12 +960,22 @@ export default class DeployManager {
           // eslint-disable-next-line no-await-in-loop -- 需要顺序删除以避免目录依赖冲突
           await fs.remove(filePath)
           console.log(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
+          deletedCount++
+
+          // 更新删除进度
+          if (progressCallback && filesToDelete.length > 0) {
+            const deleteProgress = Math.min(90, 30 + (deletedCount / filesToDelete.length) * 60)
+            progressCallback(deleteProgress, `已删除 ${deletedCount}/${filesToDelete.length} 个文件`)
+          }
         } catch (removeError) {
           ErrorLogger.logError(`删除文件失败: ${file}`, removeError, { filePath })
           console.error(`❌ 删除文件失败: ${file} - ${removeError.message}`)
         }
       }
 
+      if (progressCallback) {
+        progressCallback(100, `选择性清理完成，保护了 ${preservedFiles.length} 个文件`)
+      }
       console.log(`✅ 选择性清空完成，保护了 ${preservedFiles.length} 个文件/目录`)
     } catch (error) {
       ErrorLogger.logError('确保目录清空失败', error, { targetDir })
@@ -702,6 +1028,53 @@ export default class DeployManager {
   }
 
   /**
+   * 获取路径的顶层条目（仅打印一级目录/文件）
+   * @param {string} entryPath - 原始路径
+   * @returns {string} 顶层条目名称
+   */
+  getTopLevelEntry(entryPath) {
+    if (!entryPath || typeof entryPath !== 'string') {
+      return entryPath
+    }
+
+    const normalized = entryPath.replace(/\\+/g, '/').replace(/^\/+/, '')
+    const segments = normalized.split('/')
+    return segments[0] || normalized
+  }
+
+  /**
+   * 解析符号链接源路径
+   * @param {string} sourcePath - 可能是符号链接的源路径
+   * @returns {string} 实际的源路径
+   */
+  async resolveSymlinkSource(sourcePath) {
+    try {
+      const stats = await fs.lstat(sourcePath)
+      if (stats.isSymbolicLink()) {
+        const realPath = await fs.readlink(sourcePath)
+        // 如果是相对路径，需要解析为绝对路径
+        const resolvedPath = path.isAbsolute(realPath)
+          ? realPath
+          : path.resolve(path.dirname(sourcePath), realPath)
+
+        console.log(`🔗 检测到符号链接: ${path.basename(sourcePath)} -> ${path.basename(resolvedPath)}`)
+
+        // 验证实际路径是否存在
+        if (await fs.pathExists(resolvedPath)) {
+          return resolvedPath
+        } else {
+          console.warn(`⚠️ 符号链接目标不存在: ${resolvedPath}`)
+          return sourcePath
+        }
+      }
+      return sourcePath
+    } catch (error) {
+      console.warn(`⚠️ 解析符号链接失败: ${error.message}`)
+      return sourcePath
+    }
+  }
+
+  /**
    * 通用的文件复制方法（支持白名单保护）
    * @param {string} sourceDir - 源目录
    * @param {string} targetDir - 目标目录
@@ -709,13 +1082,12 @@ export default class DeployManager {
    * @param {Object} options - 复制选项
    */
   async copyWithPreservation(sourceDir, targetDir, preservedPaths = [], options = {}) {
-    const {
-      overwrite = true,
-      excludeFiles = ['backup-info.json'],
-      logPrefix = '📂'
-    } = options
+    const { overwrite = true, excludeFiles = ['backup-info.json'], logPrefix = '📂' } = options
 
-    console.log(`${logPrefix} 复制文件: ${path.basename(sourceDir)} -> ${path.basename(targetDir)}`)
+    // 先解析符号链接，获取实际的源路径
+    const actualSourceDir = await this.resolveSymlinkSource(sourceDir)
+
+    console.log(`${logPrefix} 复制文件: ${path.basename(actualSourceDir)} -> ${path.basename(targetDir)}`)
 
     if (preservedPaths.length > 0) {
       console.log(`🛡️ 白名单保护: ${preservedPaths.join(', ')}`)
@@ -723,11 +1095,12 @@ export default class DeployManager {
 
     let copiedCount = 0
     let skippedCount = 0
+    const loggedWhitelistEntries = new Set()
 
-    await fs.copy(sourceDir, targetDir, {
+    await fs.copy(actualSourceDir, targetDir, {
       overwrite,
       filter: (src) => {
-        const relativePath = path.relative(sourceDir, src)
+        const relativePath = path.relative(actualSourceDir, src)
 
         // 排除指定文件
         for (const excludeFile of excludeFiles) {
@@ -738,7 +1111,11 @@ export default class DeployManager {
 
         // 检查白名单保护
         if (preservedPaths.length > 0 && this.isPathPreserved(relativePath, preservedPaths)) {
-          console.log(`🛡️ 跳过白名单文件: ${relativePath}`)
+          const topLevelEntry = this.getTopLevelEntry(relativePath)
+          if (!loggedWhitelistEntries.has(topLevelEntry)) {
+            console.log(`🛡️ 跳过白名单路径: ${topLevelEntry}`)
+            loggedWhitelistEntries.add(topLevelEntry)
+          }
           skippedCount++
           return false
         }
@@ -753,12 +1130,60 @@ export default class DeployManager {
   }
 
   /**
+   * 备份时的文件复制方法（排除保护白名单文件）
+   * @param {string} sourceDir - 源目录
+   * @param {string} targetDir - 目标目录
+   * @param {Array} preservedPaths - 保护白名单路径（备份时要排除的）
+   */
+  async copyWithBackupExclusion(sourceDir, targetDir, preservedPaths = []) {
+    // 解析符号链接，获取实际的源路径
+    const actualSourceDir = await this.resolveSymlinkSource(sourceDir)
+
+    console.log(`📦 备份复制文件: ${path.basename(actualSourceDir)} -> ${path.basename(targetDir)}`)
+    console.log(`🛡️ 将排除保护白名单文件: ${preservedPaths.join(', ')}`)
+
+    let copiedCount = 0
+    let excludedCount = 0
+    const loggedWhitelistEntries = new Set()
+
+    await fs.copy(actualSourceDir, targetDir, {
+      overwrite: true,
+      filter: (src) => {
+        const relativePath = path.relative(actualSourceDir, src)
+
+        // 排除备份信息文件
+        if (src.endsWith('backup-info.json')) {
+          return false
+        }
+
+        // 排除保护白名单文件（它们不会被替换，所以无需备份）
+        if (this.isPathPreserved(relativePath, preservedPaths)) {
+          const topLevelEntry = this.getTopLevelEntry(relativePath)
+          if (!loggedWhitelistEntries.has(topLevelEntry)) {
+            console.log(`🛡️ 备份时排除保护路径: ${topLevelEntry}`)
+            loggedWhitelistEntries.add(topLevelEntry)
+          }
+          excludedCount++
+          return false
+        }
+
+        copiedCount++
+        return true
+      }
+    })
+
+    console.log(`✅ 备份完成: 复制了 ${copiedCount} 个文件，排除了 ${excludedCount} 个保护文件`)
+    return { copiedCount, excludedCount }
+  }
+
+  /**
    * 准备目标目录（创建、清空、验证）
    * @param {string} targetDir - 目标目录路径
    * @param {Array} preservedPaths - 白名单保护路径
    * @param {string} operation - 操作类型（用于日志）
+   * @param {Function} progressCallback - 进度回调
    */
-  async prepareTargetDirectory(targetDir, preservedPaths = [], operation = '部署') {
+  async prepareTargetDirectory(targetDir, preservedPaths = [], operation = '部署', progressCallback = null) {
     console.log(`🔍 ${operation}前目录状态检查: ${targetDir}`)
 
     // 确保目标目录存在
@@ -769,7 +1194,13 @@ export default class DeployManager {
 
     // 清空目标目录（支持白名单保护）
     console.log(`🗑️ 开始清空目标目录: ${targetDir}`)
-    await this.ensureDirectoryEmpty(targetDir, preservedPaths)
+
+    // 创建删除进度回调包装器
+    const deleteProgressCallback = progressCallback ? (progress, message) => {
+      progressCallback('cleaning', progress, message)
+    } : null
+
+    await this.ensureDirectoryEmpty(targetDir, preservedPaths, deleteProgressCallback)
 
     // 清空后检查
     console.log(`🔍 清空后目录状态检查: ${targetDir}`)
@@ -909,7 +1340,7 @@ export default class DeployManager {
     })
   }
 
-  async rollback(project, targetVersion = null, preservedPaths = []) {
+  async rollback(project, targetVersion = null, preservedPaths = [], sessionId = null) {
     // 参数验证
     if (!project) {
       throw new Error('project 参数不能为空')
@@ -922,6 +1353,13 @@ export default class DeployManager {
       console.log(`🛡️ 回滚白名单保护: ${preservedPaths.join(', ')}`)
     }
 
+    const operationType = 'rollback'
+    const progressMeta = (extra = {}) => ({ operationType, ...extra })
+
+    if (sessionId) {
+      this.emitProgress(sessionId, PROGRESS_STEPS.PREPARING, 0, '开始回滚流程', null, progressMeta())
+    }
+
     try {
       // 优先使用最新备份链接进行快速回滚
       const latestBackupDir = path.join(this.backupDir, `${project}-latest`)
@@ -931,6 +1369,16 @@ export default class DeployManager {
         // 使用最新备份
         backupPath = latestBackupDir
         console.log(`📂 使用最新备份: ${project}-latest`)
+        if (sessionId) {
+          this.emitProgress(
+            sessionId,
+            PROGRESS_STEPS.PREPARING,
+            20,
+            '已定位最新回滚备份',
+            null,
+            progressMeta()
+          )
+        }
       } else {
         // 查找指定版本或历史备份
         const availableBackups = await this.getAvailableBackups(project)
@@ -957,19 +1405,119 @@ export default class DeployManager {
           backupPath = availableBackups[0].path
           console.log(`🔄 使用最新历史备份: ${availableBackups[0].name}`)
         }
+
+        if (sessionId) {
+          this.emitProgress(
+            sessionId,
+            PROGRESS_STEPS.PREPARING,
+            25,
+            '已选择历史备份版本',
+            null,
+            progressMeta()
+          )
+        }
       }
 
-      return await this.performRollback(project, backupPath, preservedPaths)
+      const result = await this.performRollback(project, backupPath, preservedPaths, sessionId)
+
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.COMPLETED,
+          100,
+          '回滚成功完成',
+          null,
+          progressMeta({ status: 'completed' })
+        )
+      }
+
+      return result
     } catch (error) {
       ErrorLogger.logError('回滚', error, { project, targetVersion })
+      if (sessionId) {
+        this.emitProgress(
+          sessionId,
+          PROGRESS_STEPS.FAILED,
+          100,
+          error?.message || '回滚失败',
+          error,
+          progressMeta({ status: 'error' })
+        )
+      }
       return DeployResult.error(error)
+    }
+  }
+
+  /**
+   * 解析回滚目标版本号
+   */
+  async resolveRollbackVersion(project, backupPath) {
+    let backupInfo = null
+    let version = null
+
+    try {
+      const infoPath = path.join(backupPath, 'backup-info.json')
+      if (await fs.pathExists(infoPath)) {
+        backupInfo = await fs.readJson(infoPath)
+        version = backupInfo?.originalVersion || null
+      }
+    } catch (error) {
+      console.warn(`读取备份信息失败: ${error.message}`)
+    }
+
+    try {
+      const versionFile = path.join(backupPath, 'version.json')
+      if (await fs.pathExists(versionFile)) {
+        const versionInfo = await fs.readJson(versionFile)
+        if (versionInfo?.version && versionInfo.version !== 'unknown' && versionInfo.version !== 'error') {
+          version = versionInfo.version
+        }
+      }
+    } catch (error) {
+      console.warn(`读取备份版本文件失败: ${error.message}`)
+    }
+
+    if (!version || version === 'unknown' || version === 'error') {
+      const referenceTime = backupInfo?.backupTime || Date.now()
+      version = DateHelper.formatToYYYYMMDDHHmm(referenceTime)
+    }
+
+    return version
+  }
+
+  /**
+   * 确保回滚后的目录包含有效的版本信息
+   */
+  async ensureRollbackVersionFile(project, targetDir, version) {
+    const versionFile = path.join(targetDir, 'version.json')
+    const safeVersion = version || DateHelper.formatToYYYYMMDDHHmm(Date.now())
+
+    try {
+      if (await fs.pathExists(versionFile)) {
+        const existing = await fs.readJson(versionFile)
+        if (existing?.version && existing.version !== 'unknown' && existing.version !== 'error') {
+          return
+        }
+      }
+
+      const versionInfo = {
+        project,
+        version: safeVersion,
+        deployTime: DateHelper.getCurrentDate(),
+        source: 'rollback'
+      }
+
+      await FileHelper.safeWriteJson(versionFile, versionInfo)
+    } catch (error) {
+      console.warn(`写入回滚版本信息失败: ${error.message}`)
     }
   }
 
   /**
    * 执行实际的回滚操作
    */
-  async performRollback(project, backupPath, preservedPaths = []) {
+  async performRollback(project, backupPath, preservedPaths = [], sessionId = null) {
+    const rollbackVersion = await this.resolveRollbackVersion(project, backupPath)
     let targetDir
     try {
       // 优先使用当前配置的部署路径
@@ -995,9 +1543,16 @@ export default class DeployManager {
     try {
       // 清空目标目录（支持白名单保护）
       console.log(`🔄 清空目标目录（回滚模式）...`)
+      const progressMeta = (extra = {}) => ({ operationType: 'rollback', ...extra })
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.CLEANING, 40, '清理目标目录', null, progressMeta())
+      }
       await this.ensureDirectoryEmpty(targetDir, preservedPaths)
 
       // 恢复备份版本（使用通用方法，支持白名单保护）
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.DEPLOYING, 70, '恢复备份文件', null, progressMeta())
+      }
       await this.copyWithPreservation(backupPath, targetDir, preservedPaths, {
         overwrite: true,
         excludeFiles: ['backup-info.json'],
@@ -1007,8 +1562,15 @@ export default class DeployManager {
       console.log(`✅ 回滚完成: ${project}`)
       ErrorLogger.logSuccess('回滚', { project, backupPath })
 
+      if (sessionId) {
+        this.emitProgress(sessionId, PROGRESS_STEPS.VERIFYING, 85, '同步版本信息', null, progressMeta())
+      }
+      await this.ensureRollbackVersionFile(project, targetDir, rollbackVersion)
+      await this.updateDeployPathConfig(project, targetDir, rollbackVersion)
+
       return DeployResult.success('回滚成功', {
-        deployPath: targetDir
+        deployPath: targetDir,
+        version: rollbackVersion
       })
     } catch (rollbackError) {
       ErrorLogger.logError('回滚执行失败', rollbackError, { project, backupPath, targetDir })
