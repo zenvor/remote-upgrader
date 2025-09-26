@@ -399,6 +399,120 @@ export function setupSocketHandlers(io) {
       }
     })
 
+    // 实时操作进度更新
+    socket.on('device:operation_progress', (data) => {
+      try {
+        if (!data || typeof data !== 'object') {
+          return
+        }
+
+        const { sessionId, deviceId, step, progress, message, error, metadata } = data
+
+        if (!sessionId || !deviceId || !step) {
+          console.warn('操作进度更新：缺少必要参数', { sessionId, deviceId, step })
+          return
+        }
+
+        // 验证进度值
+        const validatedProgress = Math.min(100, Math.max(0, progress || 0))
+
+        const progressUpdate = {
+          sessionId,
+          deviceId,
+          step,
+          progress: validatedProgress,
+          message: message || '',
+          error: error || null,
+          metadata: metadata || {},
+          timestamp: new Date().toISOString()
+        }
+
+        // 向所有管理客户端广播操作进度
+        socket.broadcast.emit('device:operation_progress', progressUpdate)
+
+        console.log(`📊 设备操作进度更新: ${deviceId} [${sessionId}] - ${step} - ${validatedProgress}%`)
+
+        // 如果是错误状态，额外记录
+        if (error) {
+          console.error(`❌ 设备操作错误: ${deviceId} - ${error}`)
+        }
+
+      } catch (err) {
+        console.error('处理操作进度更新失败:', err)
+      }
+    })
+
+    // 操作会话开始事件
+    socket.on('device:operation_start', (data) => {
+      try {
+        if (!data || typeof data !== 'object') {
+          return
+        }
+
+        const { sessionId, deviceId, operationType, project, version } = data
+
+        if (!sessionId || !deviceId || !operationType) {
+          console.warn('操作开始事件：缺少必要参数')
+          return
+        }
+
+        const sessionInfo = {
+          sessionId,
+          deviceId,
+          operationType,
+          project: project || '',
+          version: version || '',
+          startTime: new Date().toISOString(),
+          status: 'started'
+        }
+
+        // 广播操作开始事件
+        socket.broadcast.emit('device:operation_start', sessionInfo)
+
+        console.log(`🚀 设备操作开始: ${deviceId} [${sessionId}] - ${operationType} ${project}`)
+
+      } catch (err) {
+        console.error('处理操作开始事件失败:', err)
+      }
+    })
+
+    // 操作会话完成/失败事件
+    socket.on('device:operation_complete', (data) => {
+      try {
+        if (!data || typeof data !== 'object') {
+          return
+        }
+
+        const { sessionId, deviceId, success, error, result } = data
+
+        if (!sessionId || !deviceId) {
+          console.warn('操作完成事件：缺少必要参数')
+          return
+        }
+
+        const completionInfo = {
+          sessionId,
+          deviceId,
+          success: success || false,
+          error: error || null,
+          result: result || {},
+          endTime: new Date().toISOString()
+        }
+
+        // 广播操作完成事件
+        socket.broadcast.emit('device:operation_complete', completionInfo)
+
+        console.log(`${success ? '✅' : '❌'} 设备操作完成: ${deviceId} [${sessionId}] - ${success ? '成功' : '失败'}`)
+
+        if (error) {
+          console.error(`操作失败详情: ${error}`)
+        }
+
+      } catch (err) {
+        console.error('处理操作完成事件失败:', err)
+      }
+    })
+
     // 设备断开连接
     socket.on('disconnect', () => {
       console.log(`Socket 断开: ${socket.id}`)
