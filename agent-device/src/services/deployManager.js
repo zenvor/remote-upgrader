@@ -6,6 +6,7 @@ import path from 'node:path'
 import { PROGRESS_STEPS, createProgressUpdate } from '../constants/progress.js'
 import { BackupHelper, DateHelper, DeployResult, ErrorLogger, FileHelper, VersionHelper } from '../utils/common.js'
 import { defaultPathValidator } from '../utils/pathValidator.js'
+import logger from '../utils/logger.js'
 
 export default class DeployManager {
   constructor(config, agent = null) {
@@ -21,13 +22,16 @@ export default class DeployManager {
     this.progressCallbacks = new Map()
     this.currentSessions = new Map()
 
+    // 备份操作锁，防止同时进行多个备份操作
+    this.backupLocks = new Map() // project -> Promise
+
     // 常量配置
     this.constants = {
       maxDisplayFiles: 15, // 目录状态检查显示的最大文件数
       configDir: config.deploy?.configDir || './config', // 配置文件目录
       deployPathsConfigFile: 'deploy-paths.json', // 部署路径配置文件名
       processTimeout: 60_000, // 子进程超时（60秒）
-      maxBackupNameLength: 50, // 备份名称最大长度
+      maxBackupNameLength: 80, // 备份名称最大长度（保留完整版本号）
       backupRetentionDays: 30 // 备份保留天数
     }
 
@@ -64,10 +68,11 @@ export default class DeployManager {
       // 初始化部署路径配置文件
       await this.initializeDeployPathsConfig()
 
-      console.log('✅ 部署管理器初始化完成')
-      console.log(`📂 备份目录: ${this.backupDir}`)
-      console.log(`🗂 备份策略: ${this.maxBackups > 0 ? `保留最新 ${this.maxBackups} 个` : '保留所有备份'}`)
-      console.log(`ℹ️ 部署目录将从 deploy-paths.json 配置文件中获取`)
+      logger.info('部署管理器初始化完成', {
+        backupDir: this.backupDir,
+        backupPolicy: this.maxBackups > 0 ? `保留最新 ${this.maxBackups} 个` : '保留所有备份',
+        configFile: path.join(this.constants.configDir, this.constants.deployPathsConfigFile)
+      })
     } catch (error) {
       ErrorLogger.logError('部署管理器初始化', error)
       throw error
@@ -84,7 +89,7 @@ export default class DeployManager {
       throw new Error('sessionId 和 callback 参数必须有效')
     }
     this.progressCallbacks.set(sessionId, callback)
-    console.log(`📊 注册进度回调: ${sessionId}`)
+    logger.debug(`📊 注册进度回调: ${sessionId}`)
   }
 
   /**
@@ -94,7 +99,7 @@ export default class DeployManager {
   removeProgressCallback(sessionId) {
     this.progressCallbacks.delete(sessionId)
     this.currentSessions.delete(sessionId)
-    console.log(`🗑️ 移除进度回调: ${sessionId}`)
+    logger.debug(`🗑️ 移除进度回调: ${sessionId}`)
   }
 
   /**
@@ -140,9 +145,9 @@ export default class DeployManager {
 
     try {
       callback(progressUpdate)
-      console.log(`📊 进度更新 [${sessionId}]: ${step} - ${progress}% - ${message}`)
+      logger.debug(`📊 进度更新 [${sessionId}]: ${step} - ${progress}% - ${message}`)
     } catch (err) {
-      console.error('进度回调执行失败:', err)
+      logger.error('进度回调执行失败:', err)
     }
   }
 
@@ -154,7 +159,7 @@ export default class DeployManager {
     if (!['frontend', 'backend'].includes(project)) {
       throw new Error('project 必须是 frontend 或 backend')
     }
-    console.log(`开始部署 ${project} 包: ${packagePath}`)
+    logger.debug(`开始部署 ${project} 包: ${packagePath}`)
 
     const operationType = 'upgrade'
     const progressMeta = (extra = {}) => ({ operationType, ...extra })
@@ -172,7 +177,7 @@ export default class DeployManager {
       const targetDir = pathValidation.path
 
       if (!pathValidation.valid) {
-        console.warn(`⚠️ 部署路径安全检查: ${pathValidation.reason}`)
+        logger.warn(`⚠️ 部署路径安全检查: ${pathValidation.reason}`)
       }
 
       // 检查路径访问权限
@@ -181,7 +186,7 @@ export default class DeployManager {
         throw new Error(`部署目录不可访问: ${accessibility.reason}`)
       }
 
-      console.log(`✅ 使用安全验证后的部署路径: ${targetDir}`)
+      logger.debug(`✅ 使用安全验证后的部署路径: ${targetDir}`)
 
       if (sessionId) {
         this.emitProgress(
@@ -195,7 +200,7 @@ export default class DeployManager {
       }
 
       // 1. 先备份当前运行的旧版本（如果存在）
-      console.log(`🔄 检查并备份当前版本...`)
+      logger.debug(`🔄 检查并备份当前版本...`)
       const backupResult = await this.backupCurrentVersion(project, targetDir, sessionId, preservedPaths)
 
       if (sessionId) {
@@ -210,15 +215,15 @@ export default class DeployManager {
       }
 
       // 2. 解压和部署新版本
-      console.log(`🔄 开始部署新版本 ${version}...`)
+      logger.debug(`🔄 开始部署新版本 ${version}...`)
       if (preservedPaths.length > 0) {
-        console.log(`🛡️ 启用白名单保护，保护路径: ${preservedPaths.join(', ')}`)
+        logger.debug(`🛡️ 启用白名单保护，保护路径: ${preservedPaths.join(', ')}`)
       }
       const deployResult = await this.extractAndDeploy(packagePath, targetDir, project, preservedPaths, sessionId)
 
       if (!deployResult.success) {
         // 部署失败，尝试恢复备份
-        console.log('❌ 部署失败，恢复旧版本...')
+        logger.debug('❌ 部署失败，恢复旧版本...')
         if (sessionId) {
           this.emitProgress(
             sessionId,
@@ -303,6 +308,32 @@ export default class DeployManager {
    * 备份当前运行的版本（在部署新版本之前）
    */
   async backupCurrentVersion(project, targetDir, sessionId = null, preservedPaths = []) {
+    // 检查是否已有备份操作正在进行
+    if (this.backupLocks.has(project)) {
+      logger.warn(`🔒 项目 ${project} 的备份操作正在进行中，等待完成...`)
+      try {
+        await this.backupLocks.get(project)
+        logger.debug(`✅ 项目 ${project} 的前一个备份操作已完成`)
+        return { success: false, reason: 'backup_in_progress' }
+      } catch (error) {
+        logger.warn(`⚠️ 项目 ${project} 的前一个备份操作失败: ${error.message}`)
+      }
+    }
+
+    // 创建备份锁
+    const backupPromise = this._performBackup(project, targetDir, sessionId, preservedPaths)
+    this.backupLocks.set(project, backupPromise)
+
+    try {
+      const result = await backupPromise
+      return result
+    } finally {
+      // 无论成功还是失败，都要清除锁
+      this.backupLocks.delete(project)
+    }
+  }
+
+  async _performBackup(project, targetDir, sessionId = null, preservedPaths = []) {
     try {
       const progressMeta = (extra = {}) => ({ operationType: 'upgrade', ...extra })
 
@@ -313,7 +344,7 @@ export default class DeployManager {
       // 检查目标目录是否有内容
       const hasExisting = await this.hasContent(targetDir)
       if (!hasExisting) {
-        console.log(`ℹ️ 部署目录为空，跳过备份: ${targetDir}`)
+        logger.debug(`ℹ️ 部署目录为空，跳过备份: ${targetDir}`)
         if (sessionId) {
           this.emitProgress(
             sessionId,
@@ -343,11 +374,8 @@ export default class DeployManager {
         // 版本信息读取失败不影响备份
       }
 
-      // 生成带时间戳的备份目录名
-      const now = new Date()
-      const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`
-      const backupName = `${project}-backup-${timestamp}-from-${currentVersion}`
-      const backupPath = path.join(this.backupDir, backupName)
+      // 生成唯一的备份目录名，避免重复创建时报错
+      const { backupName, backupPath } = await this.generateUniqueBackupPath(project, currentVersion)
 
       if (sessionId) {
         this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 40, '清理旧备份链接', null, progressMeta())
@@ -357,7 +385,7 @@ export default class DeployManager {
       const latestBackupLink = path.join(this.backupDir, `${project}-latest`)
       if (await fs.pathExists(latestBackupLink)) {
         await fs.remove(latestBackupLink)
-        console.log(`♻️ 已移除旧备份: ${project}-latest`)
+        logger.debug(`♻️ 已移除旧备份: ${project}-latest`)
       }
 
       if (sessionId) {
@@ -365,14 +393,20 @@ export default class DeployManager {
       }
 
       // 创建新备份（忽略保护白名单文件，因为它们不会被替换）
-      if (preservedPaths.length > 0) {
-        console.log(`🛡️ 备份时将忽略保护白名单文件: ${preservedPaths.join(', ')}`)
-        await this.copyWithBackupExclusion(targetDir, backupPath, preservedPaths)
-      } else {
-        // 没有白名单，使用标准复制
-        await fs.copy(targetDir, backupPath)
+      try {
+        if (preservedPaths.length > 0) {
+          logger.debug(`🛡️ 备份时将忽略保护白名单文件: ${preservedPaths.join(', ')}`)
+          await this.copyWithBackupExclusion(targetDir, backupPath, preservedPaths)
+        } else {
+          // 没有白名单，使用安全复制（处理 Git 文件）
+          await this.safeCopyWithGitHandling(targetDir, backupPath)
+        }
+      } catch (copyError) {
+        // 中文注释：复制失败时删除已创建的备份目录，避免残留空目录
+        await fs.remove(backupPath)
+        throw copyError
       }
-      console.log(`📦 已备份旧版本: ${backupName}`)
+      logger.debug(`📦 已备份旧版本: ${backupName}`)
 
       if (sessionId) {
         this.emitProgress(sessionId, PROGRESS_STEPS.BACKUP, 90, '创建备份链接', null, progressMeta())
@@ -380,7 +414,7 @@ export default class DeployManager {
 
       // 创建新的最新备份链接（使用软链接）
       await this.createBackupSymlink(backupPath, latestBackupLink, `${project}-latest`)
-      console.log(`🔗 已更新最新备份链接: ${project}-latest`)
+      logger.debug(`🔗 已更新最新备份链接: ${project}-latest`)
 
       // 记录备份信息
       const backupInfo = {
@@ -410,6 +444,64 @@ export default class DeployManager {
         targetDir
       })
       return { success: false, error: error.message }
+    }
+  }
+
+  /**
+   * 生成唯一的备份目录信息，避免因重复命名导致 mkdir 抛错
+   * 会在返回前创建空目录以占位，保证同名备份不会并发冲突
+   * @param {string} project - 项目名称
+   * @param {string} currentVersion - 当前运行版本号
+   * @returns {Promise<{backupName: string, backupPath: string}>}
+   */
+  async generateUniqueBackupPath(project, currentVersion) {
+    // 中文注释：预先确保备份根目录存在
+    await fs.ensureDir(this.backupDir)
+
+    const sanitizedVersionRaw = (currentVersion || 'unknown').replace(/[^\w.-]/g, '_') || 'unknown'
+    const maxLength = Number.isInteger(this.constants?.maxBackupNameLength) ? this.constants.maxBackupNameLength : 0
+
+    let attempt = 0
+
+    // 中文注释：包含毫秒和随机数的时间戳，彻底避免命名碰撞
+    // eslint-disable-next-line no-constant-condition -- 通过内部返回或抛错控制循环
+    while (true) {
+      const now = new Date()
+      // 使用高精度时间戳 + 随机数确保唯一性
+      const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
+      const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+      const timePart = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+      const milliPart = String(now.getMilliseconds()).padStart(3, '0')
+      const timestamp = `${datePart}-${timePart}-${milliPart}-${random}`
+      const attemptSuffix = attempt > 0 ? `-${attempt}` : ''
+      const baseName = `${project}-backup-${timestamp}${attemptSuffix}`
+      const prefix = `${baseName}-from-`
+
+      let sanitizedVersion = sanitizedVersionRaw
+      if (maxLength > 0 && prefix.length + sanitizedVersion.length > maxLength) {
+        const allowedLength = Math.max(1, maxLength - prefix.length)
+        sanitizedVersion = sanitizedVersionRaw.slice(0, allowedLength) || 'u'
+      }
+      const backupName = `${prefix}${sanitizedVersion}`
+      const backupPath = path.join(this.backupDir, backupName)
+
+      try {
+        // 使用 mkdir 的 exclusive 选项确保原子性创建
+        await fs.mkdir(backupPath, { recursive: false })
+        return { backupName, backupPath }
+      } catch (error) {
+        if (error?.code === 'EEXIST') {
+          attempt += 1
+          // 中文注释：发生冲突时等待更长时间，并增加重试次数限制
+          if (attempt > 10) {
+            throw new Error(`备份目录创建失败：经过 ${attempt} 次重试仍无法生成唯一路径`)
+          }
+          // eslint-disable-next-line no-await-in-loop -- 等待毫秒级时间差后重新生成时间戳
+          await new Promise((resolve) => setTimeout(resolve, 10 + attempt * 5))
+          continue
+        }
+        throw error
+      }
     }
   }
 
@@ -444,48 +536,81 @@ export default class DeployManager {
         throw new Error(`目标备份路径不存在: ${absoluteTargetPath}`)
       }
 
-      // 删除旧的链接（如果存在）
-      if (await fs.pathExists(linkPath)) {
-        await fs.remove(linkPath)
-        console.log(`♻️ 删除旧的备份链接: ${linkName}`)
+      const cleanExistingLink = async (reason = 'old-link') => {
+        if (!(await fs.pathExists(linkPath))) {
+          return
+        }
+
+        try {
+          await fs.remove(linkPath)
+          const reasonLabel = reason === 'old-link' ? '删除旧的备份链接' : '清理冲突的备份链接'
+          logger.debug(`♻️ ${reasonLabel}: ${linkName}`)
+        } catch (cleanupError) {
+          logger.warn(`⚠️ 清理备份链接失败: ${cleanupError.message}`)
+          throw cleanupError
+        }
+
+        if (await fs.pathExists(linkPath)) {
+          const message = '备份链接清理后仍然存在，无法继续创建符号链接'
+          logger.warn(`⚠️ ${message}`)
+          throw new Error(message)
+        }
       }
 
-      try {
-        // 尝试创建符号链接
-        await fs.symlink(absoluteTargetPath, linkPath, 'junction')
-        console.log(`🔗 创建符号链接成功: ${linkName} -> ${path.basename(absoluteTargetPath)}`)
+      await cleanExistingLink()
 
-        // 验证符号链接是否成功创建
-        const linkStats = await fs.lstat(linkPath)
-        if (linkStats.isSymbolicLink()) {
-          console.log(`✅ 符号链接验证成功`)
-          return { success: true, method: 'symlink' }
-        }
-      } catch (symlinkError) {
-        console.warn(`⚠️ 符号链接创建失败: ${symlinkError.message}`)
+      const maxSymlinkAttempts = 3
 
-        // Windows 特定的符号链接尝试
-        if (process.platform === 'win32') {
-          try {
-            // 在 Windows 上尝试目录连接
-            await fs.symlink(absoluteTargetPath, linkPath, 'dir')
-            console.log(`🔗 Windows 目录符号链接成功: ${linkName}`)
-
-            const linkStats = await fs.lstat(linkPath)
-            if (linkStats.isSymbolicLink()) {
-              return { success: true, method: 'windows-dir-symlink' }
-            }
-          } catch (winSymlinkError) {
-            console.warn(`⚠️ Windows 目录符号链接失败: ${winSymlinkError.message}`)
+      // eslint-disable-next-line no-await-in-loop -- 需要顺序尝试符号链接创建以避免竞态
+      for (let attempt = 0; attempt < maxSymlinkAttempts; attempt += 1) {
+        try {
+          await fs.symlink(absoluteTargetPath, linkPath, 'junction')
+          const linkStats = await fs.lstat(linkPath)
+          if (linkStats.isSymbolicLink()) {
+            logger.debug(`🔗 创建符号链接成功: ${linkName} -> ${path.basename(absoluteTargetPath)}`)
+            logger.debug('✅ 符号链接验证成功')
+            return { success: true, method: 'symlink' }
           }
-        }
+          // 验证失败时直接终止循环，进入回退逻辑
+          logger.warn('⚠️ 符号链接验证失败，准备回退')
+          break
+        } catch (symlinkError) {
+          const retryable = symlinkError?.code === 'EEXIST' || symlinkError?.message?.includes('Cannot overwrite non-directory')
+          if (retryable && attempt < maxSymlinkAttempts - 1) {
+            logger.warn(`⚠️ 符号链接创建失败（第 ${attempt + 1} 次），准备重试: ${symlinkError.message}`)
+            await cleanExistingLink('retry')
+            // eslint-disable-next-line no-await-in-loop -- 重试前等待，避免持续抢占文件句柄
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            continue
+          }
 
-        // 符号链接失败，回退到硬拷贝（保持原有行为）
-        console.log(`📂 回退到文件复制模式: ${linkName}`)
-        await fs.copy(absoluteTargetPath, linkPath)
-        console.log(`✅ 文件复制完成: ${linkName}`)
-        return { success: true, method: 'copy' }
+          logger.warn(`⚠️ 符号链接创建失败: ${symlinkError.message}`)
+          break
+        }
       }
+
+      // Windows 特定的符号链接尝试（在常规重试失败后执行）
+      if (process.platform === 'win32') {
+        try {
+          await cleanExistingLink('windows-retry')
+          await fs.symlink(absoluteTargetPath, linkPath, 'dir')
+          const linkStats = await fs.lstat(linkPath)
+          if (linkStats.isSymbolicLink()) {
+            logger.debug(`🔗 Windows 目录符号链接成功: ${linkName}`)
+            return { success: true, method: 'windows-dir-symlink' }
+          }
+        } catch (winSymlinkError) {
+          logger.warn(`⚠️ Windows 目录符号链接失败: ${winSymlinkError.message}`)
+        }
+      }
+
+      await cleanExistingLink('copy-fallback')
+
+      // 符号链接失败，回退到硬拷贝（保持原有行为）
+      logger.debug(`📂 回退到文件复制模式: ${linkName}`)
+      await this.safeCopyWithGitHandling(absoluteTargetPath, linkPath)
+      logger.debug(`✅ 文件复制完成: ${linkName}`)
+      return { success: true, method: 'copy' }
     } catch (error) {
       ErrorLogger.logError('创建备份符号链接失败', error, {
         targetPath,
@@ -516,8 +641,8 @@ export default class DeployManager {
 
     try {
       if (await FileHelper.safePathExists(sourceDir)) {
-        console.log(`📦 创建历史备份: ${backupName}`)
-        await fs.copy(sourceDir, backupPath, {
+        logger.debug(`📦 创建历史备份: ${backupName}`)
+        await this.safeCopyWithGitHandling(sourceDir, backupPath, {
           overwrite: false,
           errorOnExist: false
         })
@@ -536,12 +661,12 @@ export default class DeployManager {
 
         // 创建新的最新备份链接（使用软链接）
         await this.createBackupSymlink(backupPath, latestBackupLink, `${project}-latest`)
-        console.log(`🔗 已更新最新备份链接: ${project}-latest`)
+        logger.debug(`🔗 已更新最新备份链接: ${project}-latest`)
 
         return { success: true, backupPath, backupName }
       }
 
-      console.log(`ℹ️ 源目录为空或不存在，跳过备份: ${sourceDir}`)
+      logger.debug(`ℹ️ 源目录为空或不存在，跳过备份: ${sourceDir}`)
       return { success: false, reason: 'source_not_exists' }
     } catch (error) {
       ErrorLogger.logWarning('创建备份', error.message, { project, version })
@@ -590,7 +715,7 @@ export default class DeployManager {
           await FileHelper.safeCopy(packagePath, fileTargetPath)
           extractResult = DeployResult.success('文件复制完成')
         } else {
-          console.log(`🛡️ 跳过白名单保护文件: ${fileName}`)
+          logger.debug(`🛡️ 跳过白名单保护文件: ${fileName}`)
           extractResult = DeployResult.success('文件复制完成（跳过白名单文件）')
         }
       }
@@ -600,17 +725,17 @@ export default class DeployManager {
       }
 
       // 解压完成后验证
-      console.log(`🔍 解压完成后验证...`)
+      logger.debug(`🔍 解压完成后验证...`)
       try {
         const extractedFiles = await fs.readdir(targetDir)
-        console.log(`📁 解压后文件数量: ${extractedFiles.length}`)
+        logger.debug(`📁 解压后文件数量: ${extractedFiles.length}`)
 
         if (extractedFiles.length > 0) {
           // 部署完成后检查
-          console.log(`🔍 部署完成后目录状态检查: ${targetDir}`)
+          logger.debug(`🔍 部署完成后目录状态检查: ${targetDir}`)
           await this.checkDirectoryStatus(targetDir, '部署完成后')
         } else {
-          console.warn(`⚠️ 警告：解压后目录为空！`)
+          logger.warn(`⚠️ 警告：解压后目录为空！`)
         }
       } catch (verifyError) {
         ErrorLogger.logError('解压后验证失败', verifyError, { targetDir })
@@ -624,10 +749,10 @@ export default class DeployManager {
 
   async extractZip(zipPath, targetDir, preservedPaths = []) {
     try {
-      console.log(`🔧 准备解压ZIP文件:`)
-      console.log(`  源文件: ${zipPath}`)
-      console.log(`  目标目录: ${targetDir}`)
-      console.log(`  使用: adm-zip (跨平台)`)
+      logger.debug(`🔧 准备解压ZIP文件:`)
+      logger.debug(`  源文件: ${zipPath}`)
+      logger.debug(`  目标目录: ${targetDir}`)
+      logger.debug(`  使用: adm-zip (跨平台)`)
 
       // 验证 ZIP 文件是否存在
       if (!(await fs.pathExists(zipPath))) {
@@ -641,7 +766,7 @@ export default class DeployManager {
       const zip = new AdmZip(zipPath)
       const zipEntries = zip.getEntries()
 
-      console.log(`📦 ZIP 文件包含 ${zipEntries.length} 个条目`)
+      logger.debug(`📦 ZIP 文件包含 ${zipEntries.length} 个条目`)
 
       // 验证 ZIP 文件完整性
       let hasValidEntries = false
@@ -657,32 +782,44 @@ export default class DeployManager {
       }
 
       // 解压文件
-      console.log(`📂 开始解压到目标目录...`)
+      logger.debug(`📂 开始解压到目标目录...`)
 
-      if (preservedPaths.length === 0) {
-        // 没有白名单，使用快速解压
-        zip.extractAllTo(targetDir, true)
-        console.log(`✅ 使用快速解压模式`)
-      } else {
-        // 有白名单，使用选择性解压
-        console.log(`🛡️ 使用白名单保护模式解压`)
-        console.log(`🛡️ 保护路径: ${preservedPaths.join(', ')}`)
+      // 始终使用安全解压模式，排除 Git 文件、macOS 元数据和白名单文件
+      logger.debug(`🛡️ 使用安全解压模式`)
+      if (preservedPaths.length > 0) {
+        logger.debug(`🛡️ 保护路径: ${preservedPaths.join(', ')}`)
+      }
 
-        let extractedCount = 0
-        let skippedCount = 0
-        const skippedFiles = []
-        const loggedWhitelistEntries = new Set()
+      let extractedCount = 0
+      let skippedCount = 0
+      const skippedFiles = []
+      const loggedWhitelistEntries = new Set()
 
-        for (const entry of zipEntries) {
-          const entryPath = entry.entryName
+      for (const entry of zipEntries) {
+        const entryPath = entry.entryName
 
-          // 检查是否为白名单路径
-          if (this.isPathPreserved(entryPath, preservedPaths)) {
+        // 跳过 Git 文件
+        if (this.isGitRelatedPath(entryPath)) {
+          skippedCount++
+          skippedFiles.push(entryPath)
+          logger.debug(`⚠️ 跳过 Git 文件: ${entryPath}`)
+          continue
+        }
+
+        // 跳过 macOS 元数据文件和目录
+        if (this.isMacOSMetadata(entryPath)) {
+          skippedCount++
+          skippedFiles.push(entryPath)
+          continue
+        }
+
+        // 检查是否为白名单路径（仅在有白名单时检查）
+        if (preservedPaths.length > 0 && this.isPathPreserved(entryPath, preservedPaths)) {
             skippedCount++
             skippedFiles.push(entryPath)
             const topLevelEntry = this.getTopLevelEntry(entryPath)
             if (!loggedWhitelistEntries.has(topLevelEntry)) {
-              console.log(`🛡️ 跳过白名单路径: ${topLevelEntry}`)
+              logger.debug(`🛡️ 跳过白名单路径: ${topLevelEntry}`)
               loggedWhitelistEntries.add(topLevelEntry)
             }
             continue
@@ -707,21 +844,20 @@ export default class DeployManager {
             }
             extractedCount++
           } catch (extractError) {
-            console.error(`❌ 解压文件失败: ${entryPath} - ${extractError.message}`)
+            logger.error(`❌ 解压文件失败: ${entryPath} - ${extractError.message}`)
             // 继续解压其他文件，不中断整个过程
           }
         }
 
-        console.log(`✅ 选择性解压完成:`)
-        console.log(`  📁 解压文件数: ${extractedCount}`)
-        console.log(`  🛡️ 跳过文件数: ${skippedCount}`)
+        logger.debug(`✅ 安全解压完成:`)
+        logger.debug(`  📁 解压文件数: ${extractedCount}`)
+        logger.debug(`  🛡️ 跳过文件数: ${skippedCount}`)
 
         if (skippedFiles.length > 0 && skippedFiles.length <= 10) {
-          console.log(`  🛡️ 跳过的文件: ${skippedFiles.join(', ')}`)
+          logger.debug(`  🛡️ 跳过的文件: ${skippedFiles.join(', ')}`)
         } else if (skippedFiles.length > 10) {
-          console.log(`  🛡️ 跳过的文件: ${skippedFiles.slice(0, 10).join(', ')} ... 还有${skippedFiles.length - 10}个`)
+          logger.debug(`  🛡️ 跳过的文件: ${skippedFiles.slice(0, 10).join(', ')} ... 还有${skippedFiles.length - 10}个`)
         }
-      }
 
       // 验证解压结果
       const afterFiles = await fs.readdir(targetDir)
@@ -731,15 +867,15 @@ export default class DeployManager {
         throw new Error('解压完成但目标目录为空')
       }
 
-      console.log(`✅ ZIP 解压成功，目录总文件数: ${totalFiles}`)
+      logger.debug(`✅ ZIP 解压成功，目录总文件数: ${totalFiles}`)
 
       // 显示解压的主要文件
       const displayFiles = afterFiles.slice(0, 5)
-      console.log(`📋 主要文件: ${displayFiles.join(', ')}${totalFiles > 5 ? ' ...' : ''}`)
+      logger.debug(`📋 主要文件: ${displayFiles.join(', ')}${totalFiles > 5 ? ' ...' : ''}`)
 
       return DeployResult.success('ZIP 解压完成')
     } catch (error) {
-      console.error(`❌ ZIP 解压失败: ${error.message}`)
+      logger.error(`❌ ZIP 解压失败: ${error.message}`)
       ErrorLogger.logError('ZIP 解压', error, { zipPath, targetDir })
       return DeployResult.error(error)
     }
@@ -756,7 +892,7 @@ export default class DeployManager {
 
     const versionInfo = VersionHelper.createVersionInfo(project, version, packagePath, this.config.device.id)
     await FileHelper.safeWriteJson(versionFile, versionInfo)
-    console.log(`版本信息已更新: ${version}`)
+    logger.debug(`版本信息已更新: ${version}`)
   }
 
   /**
@@ -769,18 +905,18 @@ export default class DeployManager {
 
     try {
       if (!(await fs.pathExists(absoluteTargetDir))) {
-        console.log(`📂 ${stage} 目录不存在: ${absoluteTargetDir}`)
+        logger.debug(`📂 ${stage} 目录不存在: ${absoluteTargetDir}`)
         return
       }
 
       const files = await fs.readdir(absoluteTargetDir)
 
-      console.log(`📊 ${stage} 目录统计:`)
-      console.log(`  📁 目录路径: ${absoluteTargetDir}`)
-      console.log(`  📄 文件总数: ${files.length}`)
+      logger.debug(`📊 ${stage} 目录统计:`)
+      logger.debug(`  📁 目录路径: ${absoluteTargetDir}`)
+      logger.debug(`  📄 文件总数: ${files.length}`)
 
       if (files.length === 0) {
-        console.log(`  ✅ 目录为空`)
+        logger.debug(`  ✅ 目录为空`)
         return
       }
 
@@ -809,7 +945,7 @@ export default class DeployManager {
               fileSize: stat.size
             }
           } catch (statError) {
-            console.warn(`⚠️ 无法获取文件信息: ${file} - ${statError.message}`)
+            logger.warn(`⚠️ 无法获取文件信息: ${file} - ${statError.message}`)
             return null
           }
         })
@@ -841,26 +977,26 @@ export default class DeployManager {
         }
       }
 
-      console.log(`  📄 文件数量: ${fileCount}`)
-      console.log(`  🗂️  目录数量: ${dirCount}`)
-      console.log(`  💾 总大小: ${this.formatFileSize(totalSize)}`)
+      logger.debug(`  📄 文件数量: ${fileCount}`)
+      logger.debug(`  🗂️  目录数量: ${dirCount}`)
+      logger.debug(`  💾 总大小: ${this.formatFileSize(totalSize)}`)
 
       // 显示详细文件列表（限制显示数量以免刷屏）
       const maxDisplay = this.constants.maxDisplayFiles
-      console.log(`\n📋 ${stage} 文件详情 (显示前 ${Math.min(files.length, maxDisplay)} 项):`)
+      logger.debug(`\n📋 ${stage} 文件详情 (显示前 ${Math.min(files.length, maxDisplay)} 项):`)
 
       for (const [index, item] of fileDetails.slice(0, maxDisplay).entries()) {
         const icon = item.type === '目录' ? '🗂️ ' : '📄'
-        console.log(
+        logger.debug(
           `  ${(index + 1).toString().padStart(2)}. ${icon} ${item.name.padEnd(30)} ${item.type.padEnd(4)} ${item.size.padStart(10)} ${item.permissions} ${item.modified}`
         )
       }
 
       if (files.length > maxDisplay) {
-        console.log(`  ... 还有 ${files.length - maxDisplay} 个文件未显示`)
+        logger.debug(`  ... 还有 ${files.length - maxDisplay} 个文件未显示`)
       }
 
-      console.log('') // 空行分隔
+      logger.debug('') // 空行分隔
     } catch (error) {
       ErrorLogger.logError(`${stage}目录状态检查失败`, error, { targetDir: absoluteTargetDir })
     }
@@ -888,26 +1024,30 @@ export default class DeployManager {
   async ensureDirectoryEmpty(targetDir, preservedPaths = [], progressCallback = null) {
     try {
       if (preservedPaths.length === 0) {
-        // 没有白名单，使用原有的快速清空方法
-        console.log(`🔧 方法1：使用 fs.emptyDir 清空目录...`)
+        // 🚨 安全警告：没有白名单保护，可能会删除所有文件！
+        logger.warn(`🚨 安全警告：即将清空目录 ${targetDir}，但没有白名单保护！`)
+        logger.warn(`🚨 这可能会删除所有文件，请确认这是预期行为`)
+
+        // 使用原有的快速清空方法
+        logger.debug(`🔧 方法1：使用 fs.emptyDir 清空目录...`)
         if (progressCallback) {
           progressCallback(20, '清理目录文件...')
         }
         await fs.emptyDir(targetDir)
-        console.log(`✅ fs.emptyDir 执行完成`)
+        logger.debug(`✅ fs.emptyDir 执行完成`)
 
         // 严格验证清空结果
         const afterFiles = await fs.readdir(targetDir)
-        console.log(`📁 清空后文件数量: ${afterFiles.length}`)
+        logger.debug(`📁 清空后文件数量: ${afterFiles.length}`)
 
         if (afterFiles.length > 0) {
-          console.warn(`⚠️ fs.emptyDir 未完全清空，剩余文件: ${afterFiles.join(', ')}`)
+          logger.warn(`⚠️ fs.emptyDir 未完全清空，剩余文件: ${afterFiles.join(', ')}`)
           if (progressCallback) {
             progressCallback(60, '清理剩余文件...')
           }
           await this.forceEmptyDirectory(targetDir, afterFiles)
         } else {
-          console.log(`✅ 目标目录清空成功`)
+          logger.debug(`✅ 目标目录清空成功`)
         }
 
         if (progressCallback) {
@@ -916,70 +1056,125 @@ export default class DeployManager {
         return
       }
 
-      // 有白名单，使用选择性删除
-      console.log(`🛡️ 使用白名单保护模式清空目录...`)
-      console.log(`🛡️ 保护路径: ${preservedPaths.join(', ')}`)
+      // 有白名单，使用递归选择性删除
+      logger.debug(`🛡️ 使用白名单保护模式清空目录: ${targetDir}`)
+      logger.debug(`🛡️ 保护路径 (${preservedPaths.length} 个): ${preservedPaths.join(', ')}`)
 
       if (progressCallback) {
-        progressCallback(10, '分析目录内容...')
+        progressCallback(10, '递归分析目录内容...')
       }
 
-      const allFiles = await fs.readdir(targetDir)
-      console.log(`📁 目录总文件数: ${allFiles.length}`)
-
-      // 过滤出需要删除的文件（不在白名单中）
-      const filesToDelete = []
-      const preservedFiles = []
-
-      for (const file of allFiles) {
-        if (this.isPathPreserved(file, preservedPaths)) {
-          preservedFiles.push(file)
-        } else {
-          filesToDelete.push(file)
-        }
-      }
-
-      console.log(`🗑️ 需要删除的文件数: ${filesToDelete.length}`)
-      console.log(`🛡️ 保护的文件数: ${preservedFiles.length}`)
-
-      if (preservedFiles.length > 0) {
-        console.log(`🛡️ 保护的文件/目录: ${preservedFiles.join(', ')}`)
-      }
+      await this.selectivelyCleanDirectory(targetDir, preservedPaths, progressCallback)
 
       if (progressCallback) {
-        progressCallback(30, `删除 ${filesToDelete.length} 个文件...`)
+        progressCallback(100, `递归清理完成，白名单保护生效`)
       }
-
-      // 删除非白名单文件
-      let deletedCount = 0
-      for (const file of filesToDelete) {
-        const filePath = path.join(targetDir, file)
-        try {
-          // eslint-disable-next-line no-await-in-loop -- 顺序处理可降低文件系统竞争风险
-          const stat = await fs.stat(filePath)
-          // eslint-disable-next-line no-await-in-loop -- 需要顺序删除以避免目录依赖冲突
-          await fs.remove(filePath)
-          console.log(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
-          deletedCount++
-
-          // 更新删除进度
-          if (progressCallback && filesToDelete.length > 0) {
-            const deleteProgress = Math.min(90, 30 + (deletedCount / filesToDelete.length) * 60)
-            progressCallback(deleteProgress, `已删除 ${deletedCount}/${filesToDelete.length} 个文件`)
-          }
-        } catch (removeError) {
-          ErrorLogger.logError(`删除文件失败: ${file}`, removeError, { filePath })
-          console.error(`❌ 删除文件失败: ${file} - ${removeError.message}`)
-        }
-      }
-
-      if (progressCallback) {
-        progressCallback(100, `选择性清理完成，保护了 ${preservedFiles.length} 个文件`)
-      }
-      console.log(`✅ 选择性清空完成，保护了 ${preservedFiles.length} 个文件/目录`)
+      logger.debug(`✅ 递归选择性清空完成`)
     } catch (error) {
       ErrorLogger.logError('确保目录清空失败', error, { targetDir })
       throw new Error(`无法清空目标目录: ${error.message}`)
+    }
+  }
+
+  /**
+   * 递归地选择性清理目录，支持深层白名单保护
+   */
+  async selectivelyCleanDirectory(targetDir, preservedPaths, progressCallback = null, currentPath = '') {
+    try {
+      const allFiles = await fs.readdir(targetDir)
+      logger.debug(`📂 检查目录: ${targetDir} (当前路径: ${currentPath || '根目录'})`)
+      logger.debug(`📄 发现 ${allFiles.length} 个条目: ${allFiles.join(', ')}`)
+
+      for (const file of allFiles) {
+        const filePath = path.join(targetDir, file)
+        const relativePath = currentPath ? path.join(currentPath, file) : file
+
+        // 检查当前路径是否受保护
+        const isProtected = this.isPathPreserved(relativePath, preservedPaths)
+        logger.debug(`🔍 检查路径: ${relativePath} - ${isProtected ? '受保护' : '未保护'}`)
+
+        if (isProtected) {
+          logger.debug(`🛡️ 保护文件/目录: ${relativePath}`)
+          continue
+        }
+
+        try {
+          // 检查文件是否存在
+          if (!(await fs.pathExists(filePath))) {
+            logger.debug(`⚠️ 文件已不存在，跳过: ${relativePath}`)
+            continue
+          }
+
+          const stat = await fs.stat(filePath)
+
+          if (stat.isDirectory()) {
+            // 对于目录，先递归检查内部是否有需要保护的文件
+            const hasProtectedContent = await this.hasProtectedContent(filePath, preservedPaths, relativePath)
+
+            if (hasProtectedContent) {
+              // 目录内有受保护的内容，递归清理
+              logger.debug(`📁 递归清理目录: ${relativePath}`)
+              await this.selectivelyCleanDirectory(filePath, preservedPaths, progressCallback, relativePath)
+            } else {
+              // 目录内没有受保护的内容，直接删除整个目录
+              logger.debug(`🗂️ 删除整个目录: ${relativePath}`)
+              await fs.remove(filePath)
+              logger.debug(`✅ 成功删除目录: ${relativePath}`)
+            }
+          } else {
+            // 文件直接删除
+            logger.debug(`📄 删除文件: ${relativePath}`)
+            await fs.remove(filePath)
+            logger.debug(`✅ 成功删除文件: ${relativePath}`)
+          }
+        } catch (removeError) {
+          if (removeError.code === 'ENOENT') {
+            logger.debug(`⚠️ 文件已被移除，跳过: ${relativePath}`)
+          } else {
+            ErrorLogger.logError(`删除文件失败: ${relativePath}`, removeError, { filePath })
+            logger.error(`❌ 删除文件失败: ${relativePath} - ${removeError.message}`)
+          }
+        }
+      }
+    } catch (error) {
+      ErrorLogger.logError('递归清理目录失败', error, { targetDir, currentPath })
+      throw error
+    }
+  }
+
+  /**
+   * 检查目录内是否有受保护的内容
+   */
+  async hasProtectedContent(dirPath, preservedPaths, currentRelativePath) {
+    try {
+      const entries = await fs.readdir(dirPath)
+      logger.debug(`🔍 检查目录保护内容: ${currentRelativePath} (${entries.length} 个条目)`)
+
+      for (const entry of entries) {
+        const entryRelativePath = path.join(currentRelativePath, entry)
+
+        if (this.isPathPreserved(entryRelativePath, preservedPaths)) {
+          logger.debug(`🛡️ 发现保护内容: ${entryRelativePath}`)
+          return true
+        }
+
+        const entryFullPath = path.join(dirPath, entry)
+        const stat = await fs.stat(entryFullPath)
+
+        if (stat.isDirectory()) {
+          const hasProtected = await this.hasProtectedContent(entryFullPath, preservedPaths, entryRelativePath)
+          if (hasProtected) {
+            logger.debug(`🛡️ 子目录有保护内容: ${entryRelativePath}`)
+            return true
+          }
+        }
+      }
+
+      logger.debug(`✅ 目录无保护内容，可安全删除: ${currentRelativePath}`)
+      return false
+    } catch (error) {
+      logger.warn(`检查目录保护内容失败: ${dirPath}`, error.message)
+      return false
     }
   }
 
@@ -995,7 +1190,9 @@ export default class DeployManager {
     }
 
     for (const preservedPattern of preservedPaths) {
-      if (this.matchPath(filePath, preservedPattern)) {
+      const matches = this.matchPath(filePath, preservedPattern)
+      if (matches) {
+        logger.debug(`✅ 路径匹配: "${filePath}" 匹配白名单模式 "${preservedPattern}"`)
         return true
       }
     }
@@ -1005,24 +1202,40 @@ export default class DeployManager {
 
   /**
    * 路径匹配方法
-   * @param {string} filePath - 文件路径
+   * @param {string} filePath - 文件路径（相对路径）
    * @param {string} pattern - 匹配模式
    * @returns {boolean} 是否匹配
    */
   matchPath(filePath, pattern) {
+    // 标准化路径，统一使用正斜杠
+    const normalizedFilePath = filePath.replace(/\\/g, '/')
+    const normalizedPattern = pattern.replace(/\\/g, '/')
+
     // 精确匹配
-    if (filePath === pattern) {
+    if (normalizedFilePath === normalizedPattern) {
       return true
     }
 
-    // 目录匹配：如果模式以 '/' 结尾，则匹配目录
-    if (pattern.endsWith('/')) {
-      const dirName = pattern.slice(0, -1)
-      return filePath === dirName || filePath.startsWith(dirName + '/')
-    }
+    // 目录匹配：如果模式以 '/' 结尾，则匹配目录及其子内容
+    if (normalizedPattern.endsWith('/')) {
+      const dirName = normalizedPattern.slice(0, -1)
 
-    // 扩展：支持通配符匹配（可选）
-    // 这里可以添加更复杂的模式匹配逻辑
+      // 匹配目录本身
+      if (normalizedFilePath === dirName) {
+        return true
+      }
+
+      // 匹配目录内的内容
+      if (normalizedFilePath.startsWith(dirName + '/')) {
+        return true
+      }
+    } else {
+      // 如果模式不以 '/' 结尾，但文件路径在该目录下，也需要检查
+      // 例如：模式是 "storage"，文件路径是 "storage/app/file.txt"
+      if (normalizedFilePath.startsWith(normalizedPattern + '/')) {
+        return true
+      }
+    }
 
     return false
   }
@@ -1057,19 +1270,19 @@ export default class DeployManager {
           ? realPath
           : path.resolve(path.dirname(sourcePath), realPath)
 
-        console.log(`🔗 检测到符号链接: ${path.basename(sourcePath)} -> ${path.basename(resolvedPath)}`)
+        logger.debug(`🔗 检测到符号链接: ${path.basename(sourcePath)} -> ${path.basename(resolvedPath)}`)
 
         // 验证实际路径是否存在
         if (await fs.pathExists(resolvedPath)) {
           return resolvedPath
         } else {
-          console.warn(`⚠️ 符号链接目标不存在: ${resolvedPath}`)
+          logger.warn(`⚠️ 符号链接目标不存在: ${resolvedPath}`)
           return sourcePath
         }
       }
       return sourcePath
     } catch (error) {
-      console.warn(`⚠️ 解析符号链接失败: ${error.message}`)
+      logger.warn(`⚠️ 解析符号链接失败: ${error.message}`)
       return sourcePath
     }
   }
@@ -1087,17 +1300,17 @@ export default class DeployManager {
     // 先解析符号链接，获取实际的源路径
     const actualSourceDir = await this.resolveSymlinkSource(sourceDir)
 
-    console.log(`${logPrefix} 复制文件: ${path.basename(actualSourceDir)} -> ${path.basename(targetDir)}`)
+    logger.debug(`${logPrefix} 复制文件: ${path.basename(actualSourceDir)} -> ${path.basename(targetDir)}`)
 
     if (preservedPaths.length > 0) {
-      console.log(`🛡️ 白名单保护: ${preservedPaths.join(', ')}`)
+      logger.debug(`🛡️ 白名单保护: ${preservedPaths.join(', ')}`)
     }
 
     let copiedCount = 0
     let skippedCount = 0
     const loggedWhitelistEntries = new Set()
 
-    await fs.copy(actualSourceDir, targetDir, {
+    await this.safeCopyWithGitHandling(actualSourceDir, targetDir, {
       overwrite,
       filter: (src) => {
         const relativePath = path.relative(actualSourceDir, src)
@@ -1113,7 +1326,7 @@ export default class DeployManager {
         if (preservedPaths.length > 0 && this.isPathPreserved(relativePath, preservedPaths)) {
           const topLevelEntry = this.getTopLevelEntry(relativePath)
           if (!loggedWhitelistEntries.has(topLevelEntry)) {
-            console.log(`🛡️ 跳过白名单路径: ${topLevelEntry}`)
+            logger.debug(`🛡️ 跳过白名单路径: ${topLevelEntry}`)
             loggedWhitelistEntries.add(topLevelEntry)
           }
           skippedCount++
@@ -1125,7 +1338,7 @@ export default class DeployManager {
       }
     })
 
-    console.log(`✅ 复制完成: ${copiedCount} 个文件，跳过 ${skippedCount} 个白名单文件`)
+    logger.debug(`✅ 复制完成: ${copiedCount} 个文件，跳过 ${skippedCount} 个白名单文件`)
     return { copiedCount, skippedCount }
   }
 
@@ -1139,14 +1352,14 @@ export default class DeployManager {
     // 解析符号链接，获取实际的源路径
     const actualSourceDir = await this.resolveSymlinkSource(sourceDir)
 
-    console.log(`📦 备份复制文件: ${path.basename(actualSourceDir)} -> ${path.basename(targetDir)}`)
-    console.log(`🛡️ 将排除保护白名单文件: ${preservedPaths.join(', ')}`)
+    logger.debug(`📦 备份复制文件: ${path.basename(actualSourceDir)} -> ${path.basename(targetDir)}`)
+    logger.debug(`🛡️ 将排除保护白名单文件: ${preservedPaths.join(', ')}`)
 
     let copiedCount = 0
     let excludedCount = 0
     const loggedWhitelistEntries = new Set()
 
-    await fs.copy(actualSourceDir, targetDir, {
+    await this.safeCopyWithGitHandling(actualSourceDir, targetDir, {
       overwrite: true,
       filter: (src) => {
         const relativePath = path.relative(actualSourceDir, src)
@@ -1160,7 +1373,7 @@ export default class DeployManager {
         if (this.isPathPreserved(relativePath, preservedPaths)) {
           const topLevelEntry = this.getTopLevelEntry(relativePath)
           if (!loggedWhitelistEntries.has(topLevelEntry)) {
-            console.log(`🛡️ 备份时排除保护路径: ${topLevelEntry}`)
+            logger.debug(`🛡️ 备份时排除保护路径: ${topLevelEntry}`)
             loggedWhitelistEntries.add(topLevelEntry)
           }
           excludedCount++
@@ -1172,7 +1385,7 @@ export default class DeployManager {
       }
     })
 
-    console.log(`✅ 备份完成: 复制了 ${copiedCount} 个文件，排除了 ${excludedCount} 个保护文件`)
+    logger.debug(`✅ 备份完成: 复制了 ${copiedCount} 个文件，排除了 ${excludedCount} 个保护文件`)
     return { copiedCount, excludedCount }
   }
 
@@ -1184,7 +1397,7 @@ export default class DeployManager {
    * @param {Function} progressCallback - 进度回调
    */
   async prepareTargetDirectory(targetDir, preservedPaths = [], operation = '部署', progressCallback = null) {
-    console.log(`🔍 ${operation}前目录状态检查: ${targetDir}`)
+    logger.debug(`🔍 ${operation}前目录状态检查: ${targetDir}`)
 
     // 确保目标目录存在
     await fs.ensureDir(targetDir)
@@ -1193,7 +1406,7 @@ export default class DeployManager {
     await this.checkDirectoryStatus(targetDir, `${operation}前`)
 
     // 清空目标目录（支持白名单保护）
-    console.log(`🗑️ 开始清空目标目录: ${targetDir}`)
+    logger.debug(`🗑️ 开始清空目标目录: ${targetDir}`)
 
     // 创建删除进度回调包装器
     const deleteProgressCallback = progressCallback ? (progress, message) => {
@@ -1203,40 +1416,60 @@ export default class DeployManager {
     await this.ensureDirectoryEmpty(targetDir, preservedPaths, deleteProgressCallback)
 
     // 清空后检查
-    console.log(`🔍 清空后目录状态检查: ${targetDir}`)
+    logger.debug(`🔍 清空后目录状态检查: ${targetDir}`)
     await this.checkDirectoryStatus(targetDir, '清空后')
 
-    console.log(`✅ 目录准备完成: ${targetDir}`)
+    logger.debug(`✅ 目录准备完成: ${targetDir}`)
   }
 
   /**
    * 强制清空目录的多重策略
    */
   async forceEmptyDirectory(targetDir, fileList) {
-    console.log(`🔧 方法2：手动删除所有文件...`)
+    logger.debug(`🔧 方法2：手动删除所有文件...`)
 
     // 策略1：使用 fs.remove 逐个删除（顺序处理避免文件系统冲突）
     let remainingFiles = [...fileList]
     for (const file of fileList) {
       const filePath = path.join(targetDir, file)
       try {
+        // 检查文件是否仍然存在
+        if (!(await fs.pathExists(filePath))) {
+          remainingFiles = remainingFiles.filter((f) => f !== file)
+          logger.debug(`⚠️ 文件已不存在，跳过: ${file}`)
+          continue
+        }
+
         // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
         const stat = await fs.stat(filePath)
-        // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
-        await fs.remove(filePath)
+
+        // 特殊处理 Git 文件
+        if (file === '.git' || filePath.includes('.git')) {
+          await this.safeRemoveGitFiles(filePath, stat.isDirectory())
+        } else {
+          // eslint-disable-next-line no-await-in-loop -- 顺序删除避免文件系统冲突
+          await fs.remove(filePath)
+        }
+
         remainingFiles = remainingFiles.filter((f) => f !== file)
-        console.log(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
+        logger.debug(`${stat.isDirectory() ? '🗂️' : '📄'} 删除${stat.isDirectory() ? '目录' : '文件'}: ${file}`)
       } catch (removeError) {
-        ErrorLogger.logError(`fs.remove 删除失败 ${file}`, removeError, { filePath })
+        // 对于 ENOENT 错误，文件可能已被其他进程删除
+        if (removeError.code === 'ENOENT') {
+          remainingFiles = remainingFiles.filter((f) => f !== file)
+          logger.debug(`⚠️ 文件已被移除，跳过: ${file}`)
+        } else {
+          ErrorLogger.logError(`fs.remove 删除失败 ${file}`, removeError, { filePath })
+        }
       }
     }
 
     // 验证手动删除结果
     const afterManualFiles = await fs.readdir(targetDir)
-    console.log(`📁 手动清理后文件数量: ${afterManualFiles.length}`)
+    logger.debug(`📁 手动清理后文件数量: ${afterManualFiles.length}`)
 
     if (afterManualFiles.length > 0) {
-      console.warn(`⚠️ 手动删除后仍有剩余文件: ${afterManualFiles.join(', ')}`)
+      logger.warn(`⚠️ 手动删除后仍有剩余文件: ${afterManualFiles.join(', ')}`)
 
       // 策略2：使用系统命令强制删除（Linux/macOS）
       if (process.platform === 'win32') {
@@ -1246,7 +1479,7 @@ export default class DeployManager {
         await this.systemForceDelete(targetDir, afterManualFiles)
       }
     } else {
-      console.log(`✅ 目录已完全清空`)
+      logger.debug(`✅ 目录已完全清空`)
     }
   }
 
@@ -1254,7 +1487,7 @@ export default class DeployManager {
    * Linux/macOS 系统级强制删除
    */
   async systemForceDelete(targetDir, fileList) {
-    console.log(`🔧 方法3：使用系统命令强制删除...`)
+    logger.debug(`🔧 方法3：使用系统命令强制删除...`)
 
     return new Promise((resolve, reject) => {
       // 使用 rm -rf 强制删除所有内容
@@ -1274,7 +1507,7 @@ export default class DeployManager {
           // 验证删除结果
           const finalFiles = await fs.readdir(targetDir)
           if (finalFiles.length === 0) {
-            console.log(`✅ 系统命令删除成功`)
+            logger.debug(`✅ 系统命令删除成功`)
             resolve()
           } else {
             const error = new Error(`无法完全清空目录，剩余 ${finalFiles.length} 个文件`)
@@ -1299,7 +1532,7 @@ export default class DeployManager {
    * Windows PowerShell 强制删除
    */
   async windowsForceDelete(targetDir, fileList) {
-    console.log(`🔧 方法3：使用 PowerShell 强制删除...`)
+    logger.debug(`🔧 方法3：使用 PowerShell 强制删除...`)
 
     return new Promise((resolve, reject) => {
       // 构建 PowerShell 删除命令
@@ -1324,7 +1557,7 @@ export default class DeployManager {
         // 验证删除结果
         const finalFiles = await fs.readdir(targetDir)
         if (finalFiles.length === 0) {
-          console.log(`✅ PowerShell 删除成功`)
+          logger.debug(`✅ PowerShell 删除成功`)
           resolve()
         } else {
           const error = new Error(`无法完全清空目录，剩余 ${finalFiles.length} 个文件`)
@@ -1341,6 +1574,16 @@ export default class DeployManager {
   }
 
   async rollback(project, targetVersion = null, preservedPaths = [], sessionId = null) {
+    // 📋 详细的回滚参数接收日志
+    logger.info(`🎯 deployManager.rollback() 接收参数:`)
+    logger.info(`  - 项目: ${project}`)
+    logger.info(`  - 目标版本: ${targetVersion || '最新备份'}`)
+    logger.info(`  - preservedPaths 原始值: ${JSON.stringify(preservedPaths)}`)
+    logger.info(`  - preservedPaths 类型: ${typeof preservedPaths}`)
+    logger.info(`  - preservedPaths 是否为数组: ${Array.isArray(preservedPaths)}`)
+    logger.info(`  - preservedPaths 长度: ${preservedPaths?.length || 0}`)
+    logger.info(`  - sessionId: ${sessionId || 'N/A'}`)
+
     // 参数验证
     if (!project) {
       throw new Error('project 参数不能为空')
@@ -1348,9 +1591,11 @@ export default class DeployManager {
     if (!['frontend', 'backend'].includes(project)) {
       throw new Error('project 必须是 frontend 或 backend')
     }
-    console.log(`开始回滚 ${project} 到版本: ${targetVersion || '最新备份'}`)
+    logger.debug(`开始回滚 ${project} 到版本: ${targetVersion || '最新备份'}`)
     if (preservedPaths.length > 0) {
-      console.log(`🛡️ 回滚白名单保护: ${preservedPaths.join(', ')}`)
+      logger.info(`🛡️ 回滚白名单保护生效: ${preservedPaths.join(', ')}`)
+    } else {
+      logger.warn(`⚠️ 回滚无白名单保护 - 将清空目标目录所有文件！`)
     }
 
     const operationType = 'rollback'
@@ -1368,7 +1613,7 @@ export default class DeployManager {
       if (!targetVersion && (await fs.pathExists(latestBackupDir))) {
         // 使用最新备份
         backupPath = latestBackupDir
-        console.log(`📂 使用最新备份: ${project}-latest`)
+        logger.debug(`📂 使用最新备份: ${project}-latest`)
         if (sessionId) {
           this.emitProgress(
             sessionId,
@@ -1386,9 +1631,9 @@ export default class DeployManager {
           throw new Error('没有可用的备份版本')
         }
 
-        console.log(`📋 找到 ${availableBackups.length} 个历史备份:`)
+        logger.debug(`📋 找到 ${availableBackups.length} 个历史备份:`)
         for (const [index, backup] of availableBackups.entries()) {
-          console.log(`  ${index + 1}. ${backup.name} (${backup.timestamp})`)
+          logger.debug(`  ${index + 1}. ${backup.name} (${backup.timestamp})`)
         }
 
         if (targetVersion) {
@@ -1399,11 +1644,11 @@ export default class DeployManager {
           }
 
           backupPath = targetBackup.path
-          console.log(`🎯 使用指定版本备份: ${targetBackup.name}`)
+          logger.debug(`🎯 使用指定版本备份: ${targetBackup.name}`)
         } else {
           // 使用最新的历史备份
           backupPath = availableBackups[0].path
-          console.log(`🔄 使用最新历史备份: ${availableBackups[0].name}`)
+          logger.debug(`🔄 使用最新历史备份: ${availableBackups[0].name}`)
         }
 
         if (sessionId) {
@@ -1462,7 +1707,7 @@ export default class DeployManager {
         version = backupInfo?.originalVersion || null
       }
     } catch (error) {
-      console.warn(`读取备份信息失败: ${error.message}`)
+      logger.warn(`读取备份信息失败: ${error.message}`)
     }
 
     try {
@@ -1474,7 +1719,7 @@ export default class DeployManager {
         }
       }
     } catch (error) {
-      console.warn(`读取备份版本文件失败: ${error.message}`)
+      logger.warn(`读取备份版本文件失败: ${error.message}`)
     }
 
     if (!version || version === 'unknown' || version === 'error') {
@@ -1509,7 +1754,7 @@ export default class DeployManager {
 
       await FileHelper.safeWriteJson(versionFile, versionInfo)
     } catch (error) {
-      console.warn(`写入回滚版本信息失败: ${error.message}`)
+      logger.warn(`写入回滚版本信息失败: ${error.message}`)
     }
   }
 
@@ -1525,29 +1770,37 @@ export default class DeployManager {
 
       if (actualDeployPath) {
         targetDir = actualDeployPath
-        console.log(`📋 使用配置记录的部署路径: ${targetDir}`)
+        logger.debug(`📋 使用配置记录的部署路径: ${targetDir}`)
       } else {
         // 尝试从备份信息中获取原始目标目录
         const info = await fs.readJson(path.join(backupPath, 'backup-info.json')).catch(() => ({}))
         const defaultTarget = project === 'frontend' ? this.frontendDir : this.backendDir
         targetDir = info.sourceDir || defaultTarget
-        console.log(`📋 使用${info.sourceDir ? '备份记录的' : '默认'}部署路径: ${targetDir}`)
+        logger.debug(`📋 使用${info.sourceDir ? '备份记录的' : '默认'}部署路径: ${targetDir}`)
       }
     } catch {
       targetDir = project === 'frontend' ? this.frontendDir : this.backendDir
-      console.log(`📋 使用默认部署路径: ${targetDir}`)
+      logger.debug(`📋 使用默认部署路径: ${targetDir}`)
     }
 
-    console.log(`📂 目标目录: ${targetDir}`)
+    logger.debug(`📂 目标目录: ${targetDir}`)
 
     try {
       // 清空目标目录（支持白名单保护）
-      console.log(`🔄 清空目标目录（回滚模式）...`)
+      logger.debug(`🔄 清空目标目录（回滚模式）...`)
       const progressMeta = (extra = {}) => ({ operationType: 'rollback', ...extra })
+
+      const prepareProgressCallback = sessionId
+        ? (step, progress, message) => {
+            this.emitProgress(sessionId, step, progress, message, null, progressMeta())
+          }
+        : null
+
       if (sessionId) {
-        this.emitProgress(sessionId, PROGRESS_STEPS.CLEANING, 40, '清理目标目录', null, progressMeta())
+        this.emitProgress(sessionId, PROGRESS_STEPS.CLEANING, 35, '准备回滚目录', null, progressMeta())
       }
-      await this.ensureDirectoryEmpty(targetDir, preservedPaths)
+
+      await this.prepareTargetDirectory(targetDir, preservedPaths, '回滚', prepareProgressCallback)
 
       // 恢复备份版本（使用通用方法，支持白名单保护）
       if (sessionId) {
@@ -1559,7 +1812,14 @@ export default class DeployManager {
         logPrefix: '🔄'
       })
 
-      console.log(`✅ 回滚完成: ${project}`)
+      // 回滚后检查目录状态，确保与升级流程一致
+      try {
+        await this.checkDirectoryStatus(targetDir, '回滚完成后')
+      } catch (verifyError) {
+        ErrorLogger.logError('回滚完成后目录检查失败', verifyError, { project, targetDir })
+      }
+
+      logger.debug(`✅ 回滚完成: ${project}`)
       ErrorLogger.logSuccess('回滚', { project, backupPath })
 
       if (sessionId) {
@@ -1605,7 +1865,7 @@ export default class DeployManager {
 
       return backups
     } catch (error) {
-      console.warn(`获取备份列表失败: ${error.message}`)
+      logger.warn(`获取备份列表失败: ${error.message}`)
       return []
     }
   }
@@ -1743,7 +2003,7 @@ export default class DeployManager {
 
       return null
     } catch (error) {
-      console.warn(`读取部署路径配置失败: ${error.message}`)
+      logger.warn(`读取部署路径配置失败: ${error.message}`)
       return null
     }
   }
@@ -1767,7 +2027,7 @@ export default class DeployManager {
 
       return null
     } catch (error) {
-      console.warn(`读取部署版本配置失败: ${error.message}`)
+      logger.warn(`读取部署版本配置失败: ${error.message}`)
       return null
     }
   }
@@ -1784,7 +2044,7 @@ export default class DeployManager {
 
       // 如果配置文件不存在，创建初始配置
       if (await fs.pathExists(deployPathsFile)) {
-        console.log('📋 部署路径配置文件已存在')
+        logger.debug('📋 部署路径配置文件已存在')
       } else {
         const initialConfig = {
           frontend: {
@@ -1798,10 +2058,10 @@ export default class DeployManager {
         }
 
         await fs.writeJson(deployPathsFile, initialConfig, { spaces: 2 })
-        console.log('📝 创建初始部署路径配置文件')
+        logger.debug('📝 创建初始部署路径配置文件')
       }
     } catch (error) {
-      console.warn(`初始化部署路径配置失败: ${error.message}`)
+      logger.warn(`初始化部署路径配置失败: ${error.message}`)
     }
   }
 
@@ -1836,12 +2096,12 @@ export default class DeployManager {
       // 写入配置文件
       await fs.writeJson(deployPathsFile, deployPaths, { spaces: 2 })
 
-      console.log(`✅ 更新部署路径配置: ${project} -> ${deployPath}${version ? ` (版本: ${version})` : ''}`)
+      logger.debug(`✅ 更新部署路径配置: ${project} -> ${deployPath}${version ? ` (版本: ${version})` : ''}`)
 
       // 通知服务器端部署路径已更新
       await this.notifyServerDeployPathUpdate(project, deployPath, version)
     } catch (error) {
-      console.warn(`更新部署路径配置失败: ${error.message}`)
+      logger.warn(`更新部署路径配置失败: ${error.message}`)
     }
   }
 
@@ -1851,7 +2111,7 @@ export default class DeployManager {
   async notifyServerDeployPathUpdate(project, deployPath, version = null) {
     try {
       if (!this.agent || !this.agent.socketHandler) {
-        console.warn('无法通知服务器：缺少 agent 或 socket 连接')
+        logger.warn('无法通知服务器：缺少 agent 或 socket 连接')
         return
       }
 
@@ -1867,9 +2127,9 @@ export default class DeployManager {
 
       // 通过 socket 发送通知
       this.agent.socketHandler.sendNotification('deployPathUpdated', notification)
-      console.log(`📡 已通知服务器：${project} 部署路径更新为 ${deployPath}${version ? ` (版本: ${version})` : ''}`)
+      logger.debug(`📡 已通知服务器：${project} 部署路径更新为 ${deployPath}${version ? ` (版本: ${version})` : ''}`)
     } catch (error) {
-      console.warn(`通知服务器失败: ${error.message}`)
+      logger.warn(`通知服务器失败: ${error.message}`)
     }
   }
 
@@ -1884,7 +2144,7 @@ export default class DeployManager {
     }
     try {
       if (!this.maxBackups || this.maxBackups <= 0) {
-        console.log(`🗂 未配置备份数量限制，保留所有 ${project} 备份`)
+        logger.debug(`🗂 未配置备份数量限制，保留所有 ${project} 备份`)
         return
       }
 
@@ -1897,16 +2157,16 @@ export default class DeployManager {
       if (historicalBackups.length > this.maxBackups) {
         const toDelete = historicalBackups.slice(this.maxBackups)
 
-        console.log(`🗑 开始清理 ${project} 的旧备份，保留最新 ${this.maxBackups} 个备份`)
+        logger.debug(`🗑 开始清理 ${project} 的旧备份，保留最新 ${this.maxBackups} 个备份`)
 
         // 并行删除旧备份，提高性能
         const deletePromises = toDelete.map(async (backup) => {
           try {
             await fs.remove(backup.path)
-            console.log(`♻️ 已清理旧备份: ${backup.name}`)
+            logger.debug(`♻️ 已清理旧备份: ${backup.name}`)
             return { success: true, backup: backup.name }
           } catch (error) {
-            console.error(`❌ 清理备份失败 ${backup.name}:`, error.message)
+            logger.error(`❌ 清理备份失败 ${backup.name}:`, error.message)
             return { success: false, backup: backup.name, error: error.message }
           }
         })
@@ -1915,9 +2175,9 @@ export default class DeployManager {
         const successCount = results.filter((r) => r.status === 'fulfilled' && r.value.success).length
         const failCount = results.length - successCount
 
-        console.log(`✅ 备份清理完成: 成功 ${successCount} 个，失败 ${failCount} 个`)
+        logger.debug(`✅ 备份清理完成: 成功 ${successCount} 个，失败 ${failCount} 个`)
       } else {
-        console.log(`ℹ️ ${project} 备份数量 (${historicalBackups.length}) 未超过限制 (${this.maxBackups})，无需清理`)
+        logger.debug(`ℹ️ ${project} 备份数量 (${historicalBackups.length}) 未超过限制 (${this.maxBackups})，无需清理`)
       }
     } catch (error) {
       ErrorLogger.logWarning('清理旧备份', error.message, { project })
@@ -1953,5 +2213,169 @@ export default class DeployManager {
         hasLatestBackup: false
       }
     }
+  }
+
+  /**
+   * 检查路径是否为 Git 相关文件或目录
+   * @param {string} filePath - 要检查的路径
+   * @returns {boolean} 是否为 Git 相关路径
+   */
+  isGitRelatedPath(filePath) {
+    if (!filePath) {
+      return false
+    }
+
+    const normalizedPath = path.normalize(filePath)
+
+    // 判断路径是否位于 .git 目录中，若是则全部排除
+    const segments = normalizedPath.split(path.sep)
+    if (segments.includes('.git')) {
+      return true
+    }
+
+    // 仅排除常见的 Git 元信息文件（位于项目根目录）
+    const gitMetaFiles = ['.gitignore', '.gitattributes', '.gitmodules']
+    const basename = path.basename(normalizedPath)
+    return gitMetaFiles.includes(basename)
+  }
+
+  /**
+   * 安全复制文件，完全避免处理 Git 文件
+   * @param {string} src - 源路径
+   * @param {string} dest - 目标路径
+   * @param {object} options - fs.copy 选项
+   */
+  async safeCopyWithGitHandling(src, dest, options = {}) {
+    const originalFilter = options.filter
+
+    // 创建新的 filter 函数，完全排除 Git 相关文件
+    const gitAwareFilter = (srcPath, destPath) => {
+      try {
+        // 首先检查是否为 Git 相关路径，如果是则直接跳过
+        if (this.isGitRelatedPath(srcPath)) {
+          logger.debug(`⚠️ 跳过 Git 文件: ${path.relative(src, srcPath)}`)
+          return false
+        }
+
+        // 调用原有的 filter 函数（如果有）
+        if (originalFilter && !originalFilter(srcPath, destPath)) {
+          return false
+        }
+
+        return true
+      } catch (error) {
+        // 任何检查过程中的错误都记录并跳过该文件
+        logger.debug(`⚠️ 文件检查失败，跳过: ${path.relative(src, srcPath)} - ${error.message}`)
+        return false
+      }
+    }
+
+    // 包装整个复制操作，添加全局错误处理
+    try {
+      await fs.copy(src, dest, {
+        ...options,
+        filter: gitAwareFilter,
+        errorOnExist: false
+      })
+    } catch (error) {
+      // 如果仍然遇到 Git 相关错误，记录警告但不中断
+      if (error.path && this.isGitRelatedPath(error.path)) {
+        logger.warn(`⚠️ Git 文件操作失败（已安全忽略）: ${error.path} - ${error.message}`)
+        return
+      }
+
+      // 其他错误正常抛出
+      throw error
+    }
+  }
+
+  /**
+   * 安全删除 Git 文件和目录
+   * @param {string} gitPath - Git 文件或目录路径
+   * @param {boolean} isDirectory - 是否为目录
+   */
+  async safeRemoveGitFiles(gitPath, isDirectory) {
+    try {
+      if (isDirectory) {
+        // Git 目录：使用递归删除，忽略内部文件错误
+        await this.forceRemoveGitDirectory(gitPath)
+      } else {
+        // Git 文件：直接删除
+        await fs.remove(gitPath)
+      }
+    } catch (error) {
+      // Git 文件删除失败通常是临时性的，记录警告但不抛出错误
+      logger.warn(`⚠️ Git 文件删除失败（这通常是安全的）: ${path.basename(gitPath)} - ${error.message}`)
+    }
+  }
+
+  /**
+   * 强制删除 Git 目录，忽略内部文件错误
+   * @param {string} gitDirPath - Git 目录路径
+   */
+  async forceRemoveGitDirectory(gitDirPath) {
+    try {
+      // 先尝试直接删除
+      await fs.remove(gitDirPath)
+      return
+    } catch (error) {
+      logger.debug(`🔄 Git 目录直接删除失败，尝试递归清理: ${error.message}`)
+    }
+
+    try {
+      // 如果直接删除失败，递归处理目录内容
+      const entries = await fs.readdir(gitDirPath)
+
+      // 并行删除所有子项，忽略错误
+      const deletePromises = entries.map(async (entry) => {
+        const entryPath = path.join(gitDirPath, entry)
+        try {
+          await fs.remove(entryPath)
+        } catch (innerError) {
+          // 忽略 Git 内部文件删除错误
+          logger.debug(`⚠️ 忽略 Git 内部文件删除错误: ${entry}`)
+        }
+      })
+
+      await Promise.allSettled(deletePromises)
+
+      // 最后删除空目录
+      await fs.remove(gitDirPath)
+
+    } catch (finalError) {
+      // 如果所有方法都失败，这可能是权限问题或其他系统问题
+      logger.warn(`⚠️ 无法完全删除 Git 目录，这可能不影响部署: ${finalError.message}`)
+    }
+  }
+
+  /**
+   * 检查是否为 macOS 元数据文件或目录
+   * @param {string} entryPath - 文件或目录路径
+   * @returns {boolean} 是否为 macOS 元数据
+   */
+  isMacOSMetadata(entryPath) {
+    if (!entryPath || typeof entryPath !== 'string') {
+      return false
+    }
+
+    const normalizedPath = entryPath.replace(/\\/g, '/')
+
+    // 检查是否为 __MACOSX 目录或其子文件
+    if (normalizedPath.includes('__MACOSX/') || normalizedPath === '__MACOSX') {
+      return true
+    }
+
+    // 检查是否为以 ._ 开头的 macOS 资源分叉文件
+    const fileName = path.basename(normalizedPath)
+    if (fileName.startsWith('._')) {
+      return true
+    }
+
+    // 检查是否为 .DS_Store 文件
+    if (fileName === '.DS_Store') {
+      return true
+    }
+
+    return false
   }
 }

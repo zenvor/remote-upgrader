@@ -8,6 +8,7 @@ import fs from 'fs-extra'
 import si from 'systeminformation'
 import machineIdModule from 'node-machine-id'
 import { DateHelper, ErrorLogger } from './common.js'
+import logger from './logger.js'
 
 const { machineId, machineIdSync } = machineIdModule
 
@@ -40,11 +41,11 @@ export default class DeviceIdGenerator {
       // 首先尝试从本地文件读取已保存的设备ID
       const savedId = await this.loadSavedDeviceId()
       if (savedId) {
-        console.log('🔍 使用已保存的设备ID:', savedId)
+        logger.debug('🔍 使用已保存的设备ID:', savedId)
         return savedId
       }
 
-      console.log('🔧 正在生成新的设备唯一标识符...')
+      logger.debug('🔧 正在生成新的设备唯一标识符...')
 
       // 方法1: 获取机器UUID (最推荐)
       const machineUuid = await this.getMachineId()
@@ -90,13 +91,13 @@ export default class DeviceIdGenerator {
   async getMachineId() {
     try {
       const id = await machineId()
-      console.log('✅ 获取到机器UUID:', id.slice(0, 8) + '...')
+      logger.debug('✅ 获取到机器UUID:', id.slice(0, 8) + '...')
       return id
     } catch {
       try {
         // 尝试同步版本
         const id = machineIdSync()
-        console.log('✅ 获取到机器UUID (同步):', id.slice(0, 8) + '...')
+        logger.debug('✅ 获取到机器UUID (同步):', id.slice(0, 8) + '...')
         return id
       } catch (syncError) {
         ErrorLogger.logWarning('无法获取机器UUID', syncError.message)
@@ -139,23 +140,23 @@ export default class DeviceIdGenerator {
 
       // 优先使用主板序列号
       if (isValidIdentifier(baseboard.serial)) {
-        console.log('✅ 获取到有效的主板序列号')
+        logger.debug('✅ 获取到有效的主板序列号')
         return baseboard.serial
       }
 
       // 使用主板UUID
       if (isValidIdentifier(baseboard.uuid)) {
-        console.log('✅ 获取到有效的主板UUID')
+        logger.debug('✅ 获取到有效的主板UUID')
         return baseboard.uuid
       }
 
       // 使用系统UUID
       if (isValidIdentifier(system.uuid)) {
-        console.log('✅ 获取到有效的系统UUID')
+        logger.debug('✅ 获取到有效的系统UUID')
         return system.uuid
       }
 
-      console.log('⚠️ 未找到可用的主板/系统标识符')
+      logger.debug('⚠️ 未找到可用的主板/系统标识符')
       return null
     } catch (error) {
       ErrorLogger.logWarning('获取主板信息失败', error.message)
@@ -181,7 +182,7 @@ export default class DeviceIdGenerator {
       )
 
       if (primaryInterface) {
-        console.log('✅ 获取到主网卡MAC地址')
+        logger.debug('✅ 获取到主网卡MAC地址')
         return primaryInterface.mac
       }
 
@@ -191,11 +192,11 @@ export default class DeviceIdGenerator {
       )
 
       if (firstPhysical) {
-        console.log('✅ 获取到网卡MAC地址 (备选)')
+        logger.debug('✅ 获取到网卡MAC地址 (备选)')
         return firstPhysical.mac
       }
 
-      console.log('⚠️ 未找到可用的物理网络接口')
+      logger.debug('⚠️ 未找到可用的物理网络接口')
       return null
     } catch (error) {
       ErrorLogger.logWarning('获取网络接口失败', error.message)
@@ -226,7 +227,7 @@ export default class DeviceIdGenerator {
       const combined = components.join('|')
       const hash = crypto.createHash('sha256').update(combined).digest('hex')
 
-      console.log('✅ 基于系统信息生成ID:', hash.slice(0, 16) + '...')
+      logger.debug('✅ 基于系统信息生成ID:', hash.slice(0, 16) + '...')
       return hash.slice(0, this.constants.systemHashLength) // 取前32位
     } catch (error) {
       ErrorLogger.logError('生成系统ID失败', error)
@@ -271,7 +272,7 @@ export default class DeviceIdGenerator {
 
     const hash = crypto.createHash('sha256').update(combined).digest('hex')
 
-    console.log('⚠️ 使用fallback设备ID（基于主机名和系统信息）')
+    logger.debug('⚠️ 使用fallback设备ID（基于主机名和系统信息）')
     return `device-fallback-${hash.slice(0, this.constants.hashLength)}`
   }
 
@@ -295,7 +296,7 @@ export default class DeviceIdGenerator {
       }
 
       await fs.writeJson(this.deviceIdFile, deviceInfo, { spaces: 2 })
-      console.log('💾 设备ID已保存到本地文件')
+      logger.debug('💾 设备ID已保存到本地文件')
     } catch (error) {
       ErrorLogger.logWarning('保存设备ID失败', error.message)
     }

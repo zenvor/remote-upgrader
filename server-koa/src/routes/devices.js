@@ -1,6 +1,6 @@
 // 中文注释：ESM 导入
 import Router from '@koa/router'
-import { getDevices, sendCommand } from '../controllers/deviceController.js'
+import { getDevices, sendCommand, upgradeDevice, rollbackDevice } from '../controllers/deviceController.js'
 
 const router = new Router({
   prefix: '/devices'
@@ -94,10 +94,6 @@ const router = new Router({
  *                             type: string
  *                             nullable: true
  *                             description: WiFi名称
- *                           wifiSignal:
- *                             type: number
- *                             nullable: true
- *                             description: WiFi信号强度
  *                           localIp:
  *                             type: string
  *                             nullable: true
@@ -259,7 +255,6 @@ const router = new Router({
  *                   agentVersion: "v1.2.0"
  *                   # 网络信息（扁平化）
  *                   wifiName: "Office-WiFi"
- *                   wifiSignal: -45
  *                   localIp: "192.168.1.100"
  *                   macAddresses: ["aa:bb:cc:dd:ee:ff"]
  *                   # 版本信息（扁平化）
@@ -305,7 +300,6 @@ const router = new Router({
  *                   agentVersion: null
  *                   # 网络信息（扁平化）
  *                   wifiName: null
- *                   wifiSignal: null
  *                   localIp: null
  *                   macAddresses: []
  *                   # 版本信息（扁平化）
@@ -453,5 +447,151 @@ router.get('/', getDevices)
  *               error: "发送命令失败"
  */
 router.post('/:deviceId/command', sendCommand)
+
+/**
+ * @swagger
+ * /devices/{deviceId}/upgrade:
+ *   post:
+ *     tags: [Devices]
+ *     summary: 单设备升级（记录到任务管理中心）
+ *     description: 对单个设备进行升级操作，同时在任务管理中心记录任务
+ *     parameters:
+ *       - name: deviceId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 设备ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - project
+ *               - fileName
+ *             properties:
+ *               project:
+ *                 type: string
+ *                 enum: [frontend, backend]
+ *                 description: 项目类型
+ *               fileName:
+ *                 type: string
+ *                 description: 升级包文件名
+ *               version:
+ *                 type: string
+ *                 description: 版本号（可选）
+ *               fileMD5:
+ *                 type: string
+ *                 description: 文件MD5（可选）
+ *               deployPath:
+ *                 type: string
+ *                 description: 部署路径（可选）
+ *               preservedPaths:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: 保护文件列表
+ *               sessionId:
+ *                 type: string
+ *                 description: 会话ID（用于进度跟踪）
+ *           example:
+ *             project: "frontend"
+ *             fileName: "frontend-v1.0.0.zip"
+ *             version: "v1.0.0"
+ *             deployPath: "/opt/frontend"
+ *             preservedPaths: [".env", "config/"]
+ *             sessionId: "session-123"
+ *     responses:
+ *       200:
+ *         description: 升级任务创建成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "升级命令已发送"
+ *                 taskId:
+ *                   type: string
+ *                   description: 任务ID
+ *                 sessionId:
+ *                   type: string
+ *                   description: 会话ID
+ *       400:
+ *         description: 参数错误
+ *       404:
+ *         description: 设备不在线或升级包不存在
+ *       500:
+ *         description: 服务器错误
+ */
+router.post('/:deviceId/upgrade', upgradeDevice)
+
+/**
+ * @swagger
+ * /devices/{deviceId}/rollback:
+ *   post:
+ *     tags: [Devices]
+ *     summary: 单设备回滚（记录到任务管理中心）
+ *     description: 对单个设备进行回滚操作，同时在任务管理中心记录任务
+ *     parameters:
+ *       - name: deviceId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 设备ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - project
+ *             properties:
+ *               project:
+ *                 type: string
+ *                 enum: [frontend, backend]
+ *                 description: 项目类型
+ *               sessionId:
+ *                 type: string
+ *                 description: 会话ID（用于进度跟踪）
+ *           example:
+ *             project: "frontend"
+ *             sessionId: "session-123"
+ *     responses:
+ *       200:
+ *         description: 回滚任务创建成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "回滚命令已发送"
+ *                 taskId:
+ *                   type: string
+ *                   description: 任务ID
+ *                 sessionId:
+ *                   type: string
+ *                   description: 会话ID
+ *       400:
+ *         description: 参数错误
+ *       404:
+ *         description: 设备不在线
+ *       500:
+ *         description: 服务器错误
+ */
+router.post('/:deviceId/rollback', rollbackDevice)
 
 export default router

@@ -31,7 +31,7 @@ const goto = (path) => router.push(path)
         <a-menu mode="horizontal" :selected-keys="[active]" @click="({ key }) => goto(key)">
           <a-menu-item key="/devices">设备管理</a-menu-item>
           <a-menu-item key="/packages">包管理</a-menu-item>
-          <a-menu-item key="/batch-tasks">批量任务</a-menu-item>
+          <a-menu-item key="/batch-tasks">任务管理中心</a-menu-item>
         </a-menu>
       </div>
 

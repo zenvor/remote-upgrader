@@ -4,18 +4,14 @@
     <a-card :bordered="false" size="small" class="info-card" :body-style="{ padding: '16px 20px' }">
       <div class="page-header">
         <div class="page-title">
-          <h2>批量任务监控</h2>
-          <p>实时监控批量升级和回滚任务的执行状态</p>
+          <h2>任务管理中心</h2>
+          <p>实时监控所有升级和回滚任务的执行状态</p>
         </div>
         <div class="page-actions">
           <a-space>
             <a-button @click="refreshTasks">
               <ReloadOutlined />
               刷新
-            </a-button>
-            <a-button type="primary" @click="goToBatchOperation">
-              <PlusOutlined />
-              新建批量任务
             </a-button>
           </a-space>
         </div>
@@ -53,7 +49,7 @@
       <OperationBar :total="pagination.total" :show-total="true" @refresh="fetchTasks">
         <template #title>
           <a-space align="center">
-            <span>任务列表</span>
+            <span>全部任务</span>
             <a-tag v-if="autoRefresh" color="green" style="margin-left: 8px"> 自动刷新 </a-tag>
           </a-space>
         </template>
@@ -82,8 +78,8 @@
               allow-clear
               @change="handleQuery"
             >
-              <a-select-option value="upgrade">升级</a-select-option>
-              <a-select-option value="rollback">回滚</a-select-option>
+              <a-select-option value="upgrade">升级任务</a-select-option>
+              <a-select-option value="rollback">回滚任务</a-select-option>
             </a-select>
 
             <!-- 自动刷新开关 -->
@@ -109,9 +105,13 @@
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'type'">
-            <a-tag :color="record.type === 'upgrade' ? 'blue' : 'orange'">
-              {{ record.type === 'upgrade' ? '升级' : '回滚' }}
-            </a-tag>
+            <a-space>
+              <a-tag :color="record.type === 'upgrade' ? 'blue' : 'orange'">
+                {{ record.type === 'upgrade' ? '升级' : '回滚' }}
+              </a-tag>
+              <a-tag v-if="record.deviceCount === 1" color="green" size="small"> 单设备 </a-tag>
+              <a-tag v-else color="purple" size="small"> 批量({{ record.deviceCount }}台) </a-tag>
+            </a-space>
           </template>
 
           <template v-if="column.key === 'status'">
@@ -139,11 +139,11 @@
           <template v-if="column.key === 'actions'">
             <a-space size="small">
               <a-button size="small" @click="viewTaskDetail(record)"> 详情 </a-button>
-              <a-button v-if="record.status === 'running'" size="small" danger @click="cancelTask(record)">
+              <a-button :disabled="record.status !== 'running'" size="small" danger @click="cancelTask(record)">
                 取消
               </a-button>
               <a-button
-                v-if="record.status === 'completed' && record.stats.failed > 0"
+                :disabled="record.status !== 'completed' || record.stats.failed === 0"
                 size="small"
                 type="primary"
                 @click="retryFailedDevices(record)"
@@ -164,7 +164,7 @@
 <script setup>
 import { batchApi } from '@/api'
 import OperationBar from '@/components/OperationBar.vue'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -217,7 +217,8 @@ const taskColumns = [
   },
   {
     title: '类型',
-    key: 'type'
+    key: 'type',
+    width: 145
   },
   {
     title: '状态',
@@ -268,8 +269,8 @@ const taskColumns = [
     title: '操作',
     key: 'actions',
     align: 'center',
-    width: 80,
-    fixed: 'right'
+    fixed: 'right',
+    width: 230
   }
 ]
 
@@ -473,10 +474,6 @@ async function retryFailedDevices(task) {
       }
     }
   })
-}
-
-function goToBatchOperation() {
-  router.push('/batch-tasks/create')
 }
 
 // 生命周期

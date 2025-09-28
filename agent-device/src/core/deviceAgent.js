@@ -1,14 +1,15 @@
 // 中文注释：ESM 导入
 import fs from 'fs-extra'
+import { execSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
-import { execSync } from 'node:child_process'
 import { io } from 'socket.io-client'
 import si from 'systeminformation'
 import DeployManager from '../services/deployManager.js'
 import DownloadManager from '../services/downloadManager.js'
 import { DateHelper } from '../utils/common.js'
 import DeviceIdGenerator from '../utils/deviceId.js'
+import logger from '../utils/logger.js'
 import SocketHandler from './socketHandler.js'
 
 export default class DeviceAgent {
@@ -41,6 +42,7 @@ export default class DeviceAgent {
     // 并发控制
     this.registerPromise = null // 注册操作的Promise
     this.networkUpdatePromise = null // 网络信息更新的Promise
+    this.currentOperationStatus = 'idle' // 当前操作状态：idle, upgrading, rolling_back
   }
 
   validateConfig(config) {
@@ -104,7 +106,7 @@ export default class DeviceAgent {
   }
 
   async connect() {
-    console.log(`尝试连接服务器: ${this.config.server.url}`)
+    logger.info(`开始连接服务器: ${this.config.server.url}`)
 
     this.socket = io(this.config.server.url, {
       timeout: this.config.server.timeout,
@@ -120,7 +122,7 @@ export default class DeviceAgent {
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        console.log('连接超时，将开始指数退避重连策略')
+        logger.warn('连接超时，将启动指数退避重连')
         this.scheduleReconnect()
         resolve()
       }, this.config.server.timeout)
@@ -147,7 +149,7 @@ export default class DeviceAgent {
 
   onConnected() {
     const isReconnection = this.reconnectAttempts > 0
-    console.log(isReconnection ? '🔄 已重新连接到服务器' : '✅ 成功连接到升级服务器')
+    logger.info(isReconnection ? '已重新连接到服务器' : '成功连接升级服务器')
 
     this.isConnected = true
     this.clearReconnectTimer() // 清除重连定时器
@@ -158,7 +160,7 @@ export default class DeviceAgent {
   }
 
   onDisconnected() {
-    console.log('🔌 与服务器连接断开')
+    logger.warn('与服务器连接断开')
     this.isConnected = false
     this.isRegistered = false // 断开连接时重置注册状态
 
@@ -168,7 +170,7 @@ export default class DeviceAgent {
 
   handleConnectionError(error) {
     const errorMessage = this.getErrorMessage(error)
-    console.log(`❌ 连接失败: ${errorMessage}`)
+    logger.warn(`连接失败: ${errorMessage}`)
     this.isConnected = false
 
     // 开始指数退避重连
@@ -183,7 +185,7 @@ export default class DeviceAgent {
 
     // 检查是否超过最大重连次数
     if (this.reconnectAttempts >= this.config.server.maxReconnectAttempts) {
-      console.log(`⏸️  已达到最大重连次数 (${this.config.server.maxReconnectAttempts})，进入长时间等待模式`)
+      logger.warn(`达到最大重连次数 (${this.config.server.maxReconnectAttempts})，进入长时间等待模式`)
       // 达到最大次数后，使用最大延迟继续尝试（类似 GMS）
       this.reconnectAttempts = this.config.server.maxReconnectAttempts - 1
     }
@@ -195,7 +197,7 @@ export default class DeviceAgent {
 
     this.reconnectAttempts++
 
-    console.log(`⏳ 将在 ${Math.round(finalDelay / 1000)}s 后重试连接 (第 ${this.reconnectAttempts} 次)`)
+    logger.debug(`将在 ${Math.round(finalDelay / 1000)} 秒后重试连接 (第 ${this.reconnectAttempts} 次)`)
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -205,11 +207,11 @@ export default class DeviceAgent {
 
   async attemptReconnect() {
     if (!this.isConnected && this.socket) {
-      console.log(`🔄 正在重连...`)
+      logger.debug('正在发起重连')
       try {
         this.socket.connect()
       } catch (error) {
-        console.error('❌ 重连尝试失败:', error.message)
+        logger.error('重连尝试失败:', error.message)
         // 继续重连调度
         this.scheduleReconnect()
       }
@@ -238,7 +240,7 @@ export default class DeviceAgent {
   async registerDevice() {
     // 避免并发注册
     if (this.registerPromise) {
-      console.log('⏳ 注册操作已在进行中，等待完成...')
+      logger.debug('注册操作已在进行中，等待完成')
       return this.registerPromise
     }
 
@@ -280,21 +282,21 @@ export default class DeviceAgent {
         },
         network: {
           wifiName: null,
-          wifiSignal: null,
           localIp: null,
           macAddresses: []
         },
         timestamp: DateHelper.getCurrentDate()
       }
 
-      console.log('📝 注册设备信息:', basicDeviceInfo.deviceId, `(${basicDeviceInfo.deviceName}) 获取网络信息中...`)
+      logger.info(`注册设备信息: ${basicDeviceInfo.deviceId} (${basicDeviceInfo.deviceName})`)
+      logger.debug('注册载荷:', basicDeviceInfo)
       this.socket.emit('device:register', basicDeviceInfo)
       this.isRegistered = true
 
       // 异步获取网络信息并更新
       this.updateNetworkInfo()
     } catch (error) {
-      console.error('❌ 设备注册失败:', error.message)
+      logger.error('设备注册失败:', error.message)
       this.isRegistered = false
     }
   }
@@ -317,7 +319,7 @@ export default class DeviceAgent {
   async updateNetworkInfo() {
     // 避免并发更新网络信息
     if (this.networkUpdatePromise) {
-      console.log('⏳ 网络信息更新已在进行中，跳过此次更新')
+      logger.debug('网络信息更新已在进行中，跳过本次请求')
       return this.networkUpdatePromise
     }
 
@@ -332,11 +334,7 @@ export default class DeviceAgent {
   async _doUpdateNetworkInfo() {
     try {
       // 并行获取WiFi、本地地址和MAC（带超时保护）
-      const networkInfoPromise = Promise.all([
-        this.getWifiInfo(),
-        this.getLocalIp(),
-        this.getMacAddresses()
-      ])
+      const networkInfoPromise = Promise.all([this.getWifiInfo(), this.getLocalIp(), this.getMacAddresses()])
 
       let timeoutId = null
       const timeoutPromise = new Promise((_resolve, reject) => {
@@ -360,14 +358,13 @@ export default class DeviceAgent {
             deviceId: this.config.device.id,
             network: {
               wifiName: wifiInfo?.ssid || null,
-              wifiSignal: wifiInfo?.signal || null,
               localIp,
               macAddresses
             },
             timestamp: DateHelper.getCurrentDate()
           }
 
-          console.log('🌐 更新网络信息:', {
+          logger.info('网络信息已更新', {
             wifi: wifiInfo?.ssid || '无WiFi连接',
             localIp: localIp || '未知',
             macCount: Array.isArray(macAddresses) ? macAddresses.length : 0
@@ -383,7 +380,7 @@ export default class DeviceAgent {
         throw networkError
       }
     } catch (error) {
-      console.error('⚠️ 更新网络信息失败:', error.message)
+      logger.warn('更新网络信息失败:', error.message)
     }
   }
 
@@ -391,16 +388,15 @@ export default class DeviceAgent {
     try {
       const wifiInfo = await this.getWifiInfo()
       if (wifiInfo.ssid && this.socket && this.socket.connected) {
-        console.log('🌐 更新WiFi信息:', wifiInfo.ssid)
+        logger.debug(`更新 WiFi 信息: ${wifiInfo.ssid}`)
         this.socket.emit('device:update-wifi', {
           deviceId: this.config.device.id,
           wifiName: wifiInfo.ssid,
-          wifiSignal: wifiInfo.signal,
           timestamp: DateHelper.getCurrentDate()
         })
       }
     } catch (error) {
-      console.error('⚠️ 更新WiFi信息失败:', error.message)
+      logger.warn('更新 WiFi 信息失败:', error.message)
     }
   }
 
@@ -411,19 +407,19 @@ export default class DeviceAgent {
     try {
       const baseHostname = await this.getBaseHostname()
       if (!baseHostname) {
-        console.log('⚠️ 无法获取系统主机名，将使用配置文件中的默认名称')
+        logger.warn('无法获取系统主机名，将使用配置名称')
         return null
       }
 
       // 如果配置要求使用真实主机名，则不添加后缀
       if (this.config.device.useRealHostname) {
-        console.log('🖥️  使用真实主机名（无后缀）:', baseHostname)
+        logger.debug(`使用真实主机名（无后缀）: ${baseHostname}`)
         return baseHostname
       }
 
       return this.generateDeviceName(baseHostname)
     } catch (error) {
-      console.error('⚠️ 获取系统主机名失败:', error.message)
+      logger.warn('获取系统主机名失败:', error.message)
       return null
     }
   }
@@ -460,7 +456,7 @@ export default class DeviceAgent {
       const osInfo = await si.osInfo()
       if (osInfo.hostname && osInfo.hostname.trim()) {
         const hostname = this.cleanHostname(osInfo.hostname.trim())
-        console.log('🖥️  从系统信息获取主机名:', hostname)
+        logger.debug(`从系统信息获取主机名: ${hostname}`)
         return hostname
       }
     } catch {
@@ -477,7 +473,7 @@ export default class DeviceAgent {
         const lower = normalized.toLowerCase()
         if (lower !== 'localhost' && lower !== 'localhost.localdomain') {
           const cleanedHostname = this.cleanHostname(normalized)
-          console.log('🖥️  从OS模块获取主机名:', cleanedHostname)
+          logger.debug(`从 OS 模块获取主机名: ${cleanedHostname}`)
           return cleanedHostname
         }
       }
@@ -493,7 +489,7 @@ export default class DeviceAgent {
       const hostname = envHostname.trim()
       const lower = hostname.toLowerCase()
       if (lower !== 'localhost' && lower !== 'localhost.localdomain') {
-        console.log('🖥️  从环境变量获取主机名:', hostname)
+        logger.debug(`从环境变量获取主机名: ${hostname}`)
         return hostname
       }
     }
@@ -510,11 +506,11 @@ export default class DeviceAgent {
       const commandHostname = execSync('hostname', { encoding: 'utf8', timeout: 2000 }).trim()
       if (commandHostname) {
         const cleaned = this.cleanHostname(commandHostname)
-        console.log('🖥️  通过 hostname 命令获取主机名:', cleaned)
+        logger.debug(`通过 hostname 命令获取主机名: ${cleaned}`)
         return cleaned
       }
     } catch (error) {
-      console.warn('⚠️ Windows hostname 命令获取主机名失败:', error.message)
+      logger.debug('Windows hostname 命令获取主机名失败:', error.message)
     }
 
     try {
@@ -527,11 +523,11 @@ export default class DeviceAgent {
 
       if (powershellHostname) {
         const cleaned = this.cleanHostname(powershellHostname)
-        console.log('🖥️  通过 PowerShell 获取主机名:', cleaned)
+        logger.debug(`通过 PowerShell 获取主机名: ${cleaned}`)
         return cleaned
       }
     } catch (error) {
-      console.warn('⚠️ PowerShell 获取主机名失败:', error.message)
+      logger.debug('PowerShell 获取主机名失败:', error.message)
     }
 
     return null
@@ -547,7 +543,7 @@ export default class DeviceAgent {
         // 优先使用中文设备名，如果用户名看起来是英文名则使用"的设备"
         const isEnglishName = /^[a-zA-Z\s]+$/.test(userInfo.username)
         const hostname = isEnglishName ? `${userInfo.username}的${deviceType}` : `${userInfo.username}的设备`
-        console.log('🖥️  使用用户名作为设备名:', hostname)
+        logger.debug(`根据用户名生成设备名: ${hostname}`)
         return hostname
       }
     } catch {
@@ -606,7 +602,7 @@ export default class DeviceAgent {
       // 如果无法识别，返回通用名称
       return 'Mac设备'
     } catch (error) {
-      console.error('⚠️ 获取 Mac 设备类型失败:', error.message)
+      logger.warn('获取 Mac 设备类型失败:', error.message)
       return 'Mac设备'
     }
   }
@@ -621,16 +617,15 @@ export default class DeviceAgent {
     const instanceId = process.env.AGENT_INSTANCE_ID
     if (instanceId) {
       const deviceName = `${baseHostname}-${instanceId}`
-      console.log('🖥️  多实例设备名:', deviceName)
+      logger.debug(`多实例设备名: ${deviceName}`)
       return deviceName
     }
 
     // 使用进程ID作为区分
     const deviceName = `${baseHostname}-${process.pid}`
-    console.log('🖥️  使用进程ID区分的设备名:', deviceName)
+    logger.debug(`使用进程 ID 区分的设备名: ${deviceName}`)
     return deviceName
   }
-
 
   /**
    * 获取当前连接的WiFi信息（带超时处理和多种策略）
@@ -638,33 +633,30 @@ export default class DeviceAgent {
   async getWifiInfo() {
     try {
       // 直接使用原生系统命令获取 WiFi 信息
-      console.log('🔍 使用原生命令获取 WiFi 信息')
+      logger.debug('尝试使用原生命令获取 WiFi 信息')
       const nativeResult = await this.getWifiInfoFromNativeCommand()
 
       if (nativeResult && nativeResult.ssid) {
-        console.log('✅ 通过原生命令获取到 WiFi 信息:', nativeResult.ssid)
+        logger.debug(`原生命令获取到 WiFi: ${nativeResult.ssid}`)
         return nativeResult
       }
 
       // 如果获取失败，返回空结果
-      console.log('⚠️ 未获取到 WiFi 信息')
+      logger.warn('未获取到 WiFi 信息')
       return {
         ssid: null,
-        signal: null,
         frequency: null,
         type: null
       }
     } catch (error) {
-      console.error('⚠️ 获取WiFi信息失败:', error.message)
+      logger.warn('获取 WiFi 信息失败:', error.message)
       return {
         ssid: null,
-        signal: null,
         frequency: null,
         type: null
       }
     }
   }
-
 
   /**
    * 通过原生系统命令获取 WiFi 信息
@@ -681,7 +673,7 @@ export default class DeviceAgent {
 
       return null
     } catch (error) {
-      console.error('⚠️ 原生命令获取WiFi信息失败:', error.message)
+      logger.debug('原生命令获取 WiFi 信息失败:', error.message)
       return null
     }
   }
@@ -705,22 +697,14 @@ export default class DeviceAgent {
         if (ssidMatch) {
           const ssid = ssidMatch[1].trim()
 
-          // 尝试获取信号强度
-          let signal = null
-          const rssiMatch = wdutilResult.match(/\s*RSSI\s*:\s*(-?\d+)/)
-          if (rssiMatch) {
-            signal = parseInt(rssiMatch[1])
-          }
-
           return {
             ssid,
-            signal,
             frequency: null,
             type: null
           }
         }
       } catch {
-        console.log('⚠️ wdutil 命令失败，尝试备用方法')
+        logger.debug('wdutil 命令失败，尝试备用方法')
       }
 
       // 策略2：尝试使用 networksetup 命令
@@ -736,21 +720,23 @@ export default class DeviceAgent {
           const ssid = networkMatch[1].trim()
           return {
             ssid,
-            signal: null,
             frequency: null,
             type: null
           }
         }
       } catch {
-        console.log('⚠️ networksetup 命令失败，尝试废弃的 airport 命令')
+        logger.debug('networksetup 命令失败，尝试 airport 命令')
       }
 
       // 策略3：作为最后手段使用废弃的 airport 命令（忽略警告）
       try {
-        const ssidResult = execSync('/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I', {
-          encoding: 'utf8',
-          timeout: this.constants.wifiTimeout
-        })
+        const ssidResult = execSync(
+          '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I',
+          {
+            encoding: 'utf8',
+            timeout: this.constants.wifiTimeout
+          }
+        )
 
         // 解析输出获取 SSID
         const ssidMatch = ssidResult.match(/\s*SSID:\s*(.+)/)
@@ -760,30 +746,18 @@ export default class DeviceAgent {
           return null
         }
 
-        // 尝试获取信号强度
-        let signal = null
-        try {
-          const rssiMatch = ssidResult.match(/\s*agrCtlRSSI:\s*(-?\d+)/)
-          if (rssiMatch) {
-            signal = parseInt(rssiMatch[1])
-          }
-        } catch (error) {
-          console.error('⚠️ 获取 WiFi 信号强度失败:', error.message)
-        }
-
         return {
           ssid,
-          signal,
           frequency: null,
           type: null
         }
       } catch {
-        console.error('⚠️ 所有 macOS WiFi 命令都失败了')
+        logger.warn('所有 macOS WiFi 命令均失败')
       }
 
       return null
     } catch (error) {
-      console.error('⚠️ macOS WiFi 命令执行失败:', error.message)
+      logger.warn('macOS WiFi 命令执行失败:', error.message)
       return null
     }
   }
@@ -801,11 +775,11 @@ export default class DeviceAgent {
         timeout: this.constants.wifiTimeout
       })
 
-      console.log('🔍 Windows netsh 输出:', interfaceResult.substring(0, 200) + '...')
+      logger.debug('Windows netsh 输出片段:', interfaceResult.substring(0, 200) + '...')
 
       // 检查是否有WiFi适配器连接
       if (!interfaceResult.includes('SSID') || interfaceResult.includes('There is no profile assigned')) {
-        console.log('⚠️ Windows WiFi: 未检测到WiFi连接或适配器')
+        logger.warn('Windows WiFi: 未检测到连接或适配器')
         return null
       }
 
@@ -813,34 +787,19 @@ export default class DeviceAgent {
       const ssid = ssidMatch ? ssidMatch[1].trim() : null
 
       if (!ssid || ssid === '') {
-        console.log('⚠️ Windows WiFi: SSID为空或未找到')
+        logger.warn('Windows WiFi: SSID 为空或未找到')
         return null
       }
 
-      console.log('✅ Windows WiFi: 成功获取SSID:', ssid)
-
-      // 尝试获取信号强度
-      let signal = null
-      try {
-        const signalMatch = interfaceResult.match(/\s*Signal\s*:\s*(\d+)%/)
-        if (signalMatch) {
-          // 将百分比转换为 dBm 大概值（简化计算）
-          const percentage = parseInt(signalMatch[1])
-          signal = Math.round(-100 + (percentage * 0.7)) // 简化的 dBm 估算
-          console.log('✅ Windows WiFi: 成功获取信号强度:', `${percentage}% (${signal}dBm)`)
-        }
-      } catch (error) {
-        console.error('⚠️ 获取 WiFi 信号强度失败:', error.message)
-      }
+      logger.debug(`Windows WiFi 成功获取 SSID: ${ssid}`)
 
       return {
         ssid,
-        signal,
         frequency: null,
         type: null
       }
     } catch (error) {
-      console.error('⚠️ Windows WiFi 命令执行失败:', error.message)
+      logger.warn('Windows WiFi 命令执行失败:', error.message)
       return null
     }
   }
@@ -872,7 +831,7 @@ export default class DeviceAgent {
             ssid = parts[1]
           }
         } catch (nmcliError) {
-          console.error('⚠️ Linux WiFi 命令都失败了:', error.message, nmcliError.message)
+          logger.debug('Linux WiFi 命令均失败:', error.message, nmcliError.message)
           return null
         }
       }
@@ -881,36 +840,13 @@ export default class DeviceAgent {
         return null
       }
 
-      // 尝试获取信号强度
-      let signal = null
-      try {
-        const signalResult = execSync('cat /proc/net/wireless', {
-          encoding: 'utf8',
-          timeout: this.constants.wifiTimeout
-        })
-        // 解析无线信号强度（简化处理）
-        const lines = signalResult.split('\n')
-        for (const line of lines) {
-          if (line.includes(':')) {
-            const parts = line.trim().split(/\s+/)
-            if (parts.length >= 4) {
-              signal = parseInt(parts[3]) // 信号质量
-              break
-            }
-          }
-        }
-      } catch (error) {
-        console.error('⚠️ 获取 Linux WiFi 信号强度失败:', error.message)
-      }
-
       return {
         ssid,
-        signal,
         frequency: null,
         type: null
       }
     } catch (error) {
-      console.error('⚠️ Linux WiFi 命令执行失败:', error.message)
+      logger.warn('Linux WiFi 命令执行失败:', error.message)
       return null
     }
   }
@@ -957,7 +893,7 @@ export default class DeviceAgent {
   // 在拿到 deployPath 后，计算 storage 与回滚能力并上报
   async updateSystemInfoAfterRegistration() {
     try {
-      console.log('🔧 开始更新系统信息')
+      logger.info('开始更新系统信息')
 
       // 获取基础系统信息，不进行存储检查
 
@@ -981,22 +917,21 @@ export default class DeviceAgent {
         }
       }
 
-      console.log('📊 系统信息收集完成:', {
+      logger.info('系统信息已收集', {
         rollbackAvailable,
         arch: this.config.device.arch
       })
 
       if (this.socket && this.socket.connected) {
         this.socket.emit('device:update-system', payload)
-        console.log('✅ 系统信息已发送到服务器')
+        logger.info('系统信息已发送到服务器')
       } else {
-        console.log('⚠️ Socket未连接，无法发送系统信息')
+        logger.warn('Socket 未连接，无法发送系统信息')
       }
     } catch (error) {
-      console.error('❌ 更新系统信息失败:', error.message)
+      logger.error('更新系统信息失败:', error.message)
     }
   }
-
 
   async checkRollbackAvailable() {
     try {
@@ -1007,7 +942,7 @@ export default class DeviceAgent {
       const files = await fs.readdir(backupDir)
       return files && files.length > 0
     } catch (error) {
-      console.error('⚠️ 检查回滚可用性失败:', error.message)
+      logger.warn('检查回滚可用性失败:', error.message)
       return null
     }
   }
@@ -1017,11 +952,11 @@ export default class DeviceAgent {
    */
   async initializeDeviceId() {
     try {
-      console.log('🔧 初始化设备唯一标识符...')
+      logger.info('初始化设备唯一标识符...')
 
       // 优先使用环境变量中的设备ID (用于测试和手动指定)
       if (process.env.DEVICE_ID) {
-        console.log('📝 使用环境变量中的设备ID:', process.env.DEVICE_ID)
+        logger.info(`使用环境变量中的设备 ID: ${process.env.DEVICE_ID}`)
         this.config.device.id = process.env.DEVICE_ID
         return
       }
@@ -1031,11 +966,11 @@ export default class DeviceAgent {
       const deviceId = await deviceIdGenerator.generateDeviceId()
 
       this.config.device.id = deviceId
-      console.log('✅ 设备ID已初始化:', deviceId)
+      logger.info(`设备 ID 已初始化: ${deviceId}`)
 
       // 获取设备详细信息用于调试和日志
       const deviceInfo = await deviceIdGenerator.getDeviceInfo()
-      console.log('📊 设备信息:', {
+      logger.debug('设备基础信息', {
         manufacturer: deviceInfo.manufacturer,
         model: deviceInfo.model,
         platform: deviceInfo.platform,
@@ -1043,11 +978,11 @@ export default class DeviceAgent {
         arch: deviceInfo.arch
       })
     } catch (error) {
-      console.error('❌ 初始化设备ID失败:', error)
+      logger.error('初始化设备 ID 失败:', error)
       // Fallback到时间戳ID
       const fallbackId = `device-fallback-${Date.now()}`
       this.config.device.id = fallbackId
-      console.log('⚠️ 使用fallback设备ID:', fallbackId)
+      logger.warn(`使用 fallback 设备 ID: ${fallbackId}`)
     }
   }
   // 确保必要目录存在
@@ -1064,9 +999,9 @@ export default class DeviceAgent {
     try {
       // 并行创建所有目录，提高性能
       await Promise.all(dirs.map((dir) => fs.ensureDir(dir)))
-      console.log('✅ 目录结构初始化完成')
+      logger.info('目录结构初始化完成')
     } catch (error) {
-      console.error('❌ 目录创建失败:', error)
+      logger.error('目录创建失败:', error)
       throw error
     }
   }
@@ -1084,9 +1019,13 @@ export default class DeviceAgent {
   // 发送设备状态
   reportStatus(status) {
     if (!status || typeof status !== 'string') {
-      console.error('❌ 设备状态参数无效')
+      logger.warn('设备状态参数无效')
       return
     }
+
+    // 更新内部操作状态
+    this.currentOperationStatus =
+      status === 'upgrading' ? 'upgrading' : status === 'rolling_back' ? 'rolling_back' : 'idle'
 
     try {
       if (this.isConnected && this.socket) {
@@ -1096,21 +1035,33 @@ export default class DeviceAgent {
           timestamp: DateHelper.getCurrentDate()
         })
       } else {
-        console.log('⚠️ Socket未连接，无法发送设备状态')
+        logger.warn('Socket 未连接，无法发送设备状态')
       }
     } catch (error) {
-      console.error('❌ 发送设备状态失败:', error.message)
+      logger.warn('发送设备状态失败:', error.message)
+    }
+  }
+
+  // 检查是否可以执行操作
+  canPerformOperation() {
+    if (this.currentOperationStatus === 'idle') {
+      return { canPerform: true }
+    }
+
+    return {
+      canPerform: false,
+      reason: `设备正在执行${this.currentOperationStatus === 'upgrading' ? '升级' : '回滚'}操作，请稍后重试`
     }
   }
 
   // 断开连接
   disconnect() {
     try {
-      console.log('🔌 正在断开连接...')
+      logger.info('正在断开连接...')
       this.cleanup()
-      console.log('✅ 连接已断开')
+      logger.info('连接已断开')
     } catch (error) {
-      console.error('❌ 断开连接时发生错误:', error.message)
+      logger.warn('断开连接时发生错误:', error.message)
     }
   }
 
@@ -1126,7 +1077,7 @@ export default class DeviceAgent {
         this.socket.disconnect()
         this.socket.close()
       } catch (error) {
-        console.error('⚠️ 清理Socket时发生错误:', error.message)
+        logger.warn('清理 Socket 时发生错误:', error.message)
       }
       this.socket = null
     }
@@ -1143,7 +1094,7 @@ export default class DeviceAgent {
           this.socketHandler.cleanup()
         }
       } catch (error) {
-        console.error('⚠️ 清理SocketHandler时发生错误:', error.message)
+        logger.warn('清理 SocketHandler 时发生错误:', error.message)
       }
       this.socketHandler = null
     }
@@ -1155,7 +1106,7 @@ export default class DeviceAgent {
           this.downloadManager.cleanup()
         }
       } catch (error) {
-        console.error('⚠️ 清理DownloadManager时发生错误:', error.message)
+        logger.warn('清理 DownloadManager 时发生错误:', error.message)
       }
       this.downloadManager = null
     }
@@ -1167,7 +1118,7 @@ export default class DeviceAgent {
           this.deployManager.cleanup()
         }
       } catch (error) {
-        console.error('⚠️ 清理DeployManager时发生错误:', error.message)
+        logger.warn('清理 DeployManager 时发生错误:', error.message)
       }
       this.deployManager = null
     }
@@ -1175,35 +1126,5 @@ export default class DeviceAgent {
     // 清理并发控制的Promise引用
     this.registerPromise = null
     this.networkUpdatePromise = null
-  }
-
-  // 优雅关闭
-  async gracefulShutdown() {
-    try {
-      console.log('🔄 开始优雅关闭设备代理...')
-
-      // 发送离线状态（带超时保护）
-      if (this.isConnected && this.socket) {
-        try {
-          this.reportStatus('offline')
-          // 等待状态发送完成，但不超过1秒
-          await Promise.race([
-            new Promise((resolve) => setTimeout(resolve, this.constants.statusSendDelay)),
-            new Promise((resolve) => setTimeout(resolve, 1000))
-          ])
-        } catch (error) {
-          console.error('⚠️ 发送离线状态失败:', error.message)
-        }
-      }
-
-      // 清理所有资源
-      this.cleanup()
-
-    } catch (error) {
-      console.error('❌ 优雅关闭时发生错误:', error.message)
-      // 强制清理
-      this.cleanup()
-      throw error
-    }
   }
 }

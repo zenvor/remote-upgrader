@@ -1,6 +1,9 @@
 // 中文注释：ESM 导入
 import deviceManager from '../models/deviceManager.js'
 import { getDeviceDeployPaths, getAllDevices as getStoredDevices, saveDevicePreservedPaths, getDevicePreservedPaths } from '../models/deviceStorage.js'
+import { initializeBatchTaskManager } from './batchController.js'
+import { getPackageConfig } from '../models/packageConfig.js'
+import { ErrorLogger } from '../utils/common.js'
 
 /**
  * 获取设备列表（支持筛选和分页）
@@ -75,7 +78,6 @@ async function getDevices(ctx) {
 
         // 网络信息（扁平化）
         wifiName: storedDevice.network?.wifiName || null,
-        wifiSignal: storedDevice.network?.wifiSignal || null,
         localIp: storedDevice.network?.localIp || null,
         macAddresses: storedDevice.network?.macAddresses || [],
 
@@ -123,7 +125,10 @@ async function getDevices(ctx) {
         upgradeHistory: storedDevice.upgradeHistory || [],
 
         // 白名单配置
-        preservedPaths: storedDevice.preservedPaths || {}
+        preservedPaths: storedDevice.preservedPaths || {},
+
+        // 当前操作进度信息（来自内存中的实时状态）
+        currentOperation: liveDevice?.currentOperation || null
       }
     })
 
@@ -191,54 +196,15 @@ async function sendCommand(ctx) {
   try {
     const payload = data && typeof data === 'object' ? { ...data } : {}
 
-    if (command === 'cmd:upgrade') {
-      const { project } = payload
-      if (!project || !['frontend', 'backend'].includes(project)) {
-        ctx.status = 400
-        ctx.body = {
-          success: false,
-          error: '升级命令需要有效的 project 参数 (frontend 或 backend)'
-        }
-        return
+    // 废弃警告：升级和回滚命令已改为通过批量管理器处理
+    if (command === 'cmd:upgrade' || command === 'cmd:rollback') {
+      console.warn(`⚠️ 通过 sendCommand 发送 ${command} 已废弃，请使用专用的升级/回滚接口`)
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: `${command} 命令已废弃，请使用 /devices/:deviceId/upgrade 或 /devices/:deviceId/rollback 接口`
       }
-
-      if (!payload.deployPath) {
-        try {
-          const deployPaths = await getDeviceDeployPaths(deviceId)
-          if (deployPaths && deployPaths[project]) {
-            payload.deployPath = deployPaths[project]
-          }
-        } catch (error) {
-          console.warn(`读取设备 ${deviceId} 部署路径失败:`, error.message)
-        }
-      }
-    }
-
-    if (command === 'cmd:rollback') {
-      const { project } = payload
-      if (!project || !['frontend', 'backend'].includes(project)) {
-        ctx.status = 400
-        ctx.body = {
-          success: false,
-          error: '回滚命令需要有效的 project 参数 (frontend 或 backend)'
-        }
-        return
-      }
-
-      // 获取保存的白名单配置并添加到回滚命令参数中
-      try {
-        const preservedPaths = await getDevicePreservedPaths(deviceId, project)
-        console.log(`🔍 获取设备 ${deviceId} 的 ${project} 白名单配置: ${JSON.stringify(preservedPaths)}`)
-        if (preservedPaths.length > 0) {
-          payload.preservedPaths = preservedPaths
-          console.log(`✅ 获取设备 ${deviceId} 的 ${project} 回滚白名单配置: ${preservedPaths.join(', ')}`)
-        } else {
-          console.log(`⚠️ 设备 ${deviceId} 的 ${project} 没有白名单配置`)
-        }
-      } catch (error) {
-        console.warn(`❌ 获取设备 ${deviceId} 白名单配置失败:`, error.message)
-        // 不中断操作，回滚依然可以进行
-      }
+      return
     }
 
     const success = deviceManager.sendToDevice(deviceId, command, payload)
@@ -278,4 +244,217 @@ async function sendCommand(ctx) {
   }
 }
 
-export { getDevices, sendCommand }
+/**
+ * 单设备升级 - 通过任务管理器记录
+ */
+async function upgradeDevice(ctx) {
+  try {
+    const { deviceId } = ctx.params
+    const {
+      project,
+      fileName,
+      version,
+      fileMD5,
+      deployPath,
+      preservedPaths = [],
+      sessionId
+    } = ctx.request.body
+
+    // 记录升级请求详情
+    console.log(`🚀 收到升级请求 [设备: ${deviceId}] [项目: ${project}] [包: ${fileName}] [会话: ${sessionId || 'N/A'}] [来源IP: ${ctx.request.ip}]`)
+
+    // 参数验证
+    if (!project || !['frontend', 'backend'].includes(project)) {
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: '项目类型必须是 frontend 或 backend'
+      }
+      return
+    }
+
+    if (!fileName) {
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: '升级包文件名不能为空'
+      }
+      return
+    }
+
+    // 检查设备是否可以执行升级操作
+    const operationCheck = deviceManager.canPerformOperation(deviceId, 'upgrade')
+    if (!operationCheck.canPerform) {
+      ctx.status = 409 // Conflict
+      ctx.body = {
+        success: false,
+        error: operationCheck.reason
+      }
+      return
+    }
+
+    // 获取包信息
+    const packageConfig = await getPackageConfig()
+    const packageInfo = packageConfig.packages[project]?.packages[fileName]
+
+    if (!packageInfo) {
+      ctx.status = 404
+      ctx.body = {
+        success: false,
+        error: '指定的升级包不存在'
+      }
+      return
+    }
+
+    // 创建单设备任务记录
+    const batchTaskManager = await initializeBatchTaskManager()
+    const taskId = await batchTaskManager.createUpgradeTask({
+      deviceIds: [deviceId],
+      packageInfo: {
+        fileName,
+        version: version || packageInfo.version,
+        fileMD5: fileMD5 || packageInfo.fileMD5,
+        packagePath: `packages/${project}/${fileName}`
+      },
+      project,
+      deployPath,
+      preservedPaths,
+      sessionId, // 传递会话ID以支持进度追踪
+      creator: ctx.state.user?.username || 'system',
+      scope: 'single'
+    })
+
+    // 保存白名单配置
+    if (preservedPaths && preservedPaths.length > 0) {
+      try {
+        await saveDevicePreservedPaths(deviceId, project, preservedPaths)
+      } catch (error) {
+        console.warn(`保存设备 ${deviceId} 白名单配置失败:`, error.message)
+      }
+    }
+
+    // 异步执行升级任务（不等待完成，立即返回）
+    batchTaskManager.executeTask(taskId).catch(error => {
+      ErrorLogger.logError('单设备升级任务执行失败', error, { taskId, deviceId })
+      console.error(`❌ 单设备升级任务执行失败: ${taskId}`, error.message)
+    })
+
+    console.log(`✅ 单设备升级任务已创建并启动: ${taskId}`)
+
+    ctx.body = {
+      success: true,
+      message: '升级命令已发送',
+      taskId,
+      sessionId
+    }
+
+  } catch (error) {
+    ErrorLogger.logError('单设备升级失败', error, { deviceId: ctx.params.deviceId })
+    ctx.status = 500
+    ctx.body = {
+      success: false,
+      error: process.env.NODE_ENV === 'production' ? '升级失败' : error.message
+    }
+  }
+}
+
+/**
+ * 单设备回滚 - 通过任务管理器记录
+ */
+async function rollbackDevice(ctx) {
+  try {
+    const { deviceId } = ctx.params
+    const { project, sessionId } = ctx.request.body
+
+    // 参数验证
+    if (!project || !['frontend', 'backend'].includes(project)) {
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: '项目类型必须是 frontend 或 backend'
+      }
+      return
+    }
+
+    // 检查设备是否可以执行回滚操作
+    const operationCheck = deviceManager.canPerformOperation(deviceId, 'rollback')
+    if (!operationCheck.canPerform) {
+      ctx.status = 409 // Conflict
+      ctx.body = {
+        success: false,
+        error: operationCheck.reason
+      }
+      return
+    }
+
+    // 获取保存的白名单配置
+    let preservedPaths = []
+    try {
+      preservedPaths = await getDevicePreservedPaths(deviceId, project)
+      console.log(`🔍 获取设备 ${deviceId} 的 ${project} 白名单配置: ${JSON.stringify(preservedPaths)}`)
+
+      // 安全检查：如果没有白名单配置，应该警告并停止回滚操作，防止删除所有文件
+      if (!preservedPaths || preservedPaths.length === 0) {
+        console.warn(`⚠️ 警告：设备 ${deviceId} 的 ${project} 没有白名单配置，回滚可能会删除所有文件！`)
+
+        // 可以选择以下策略之一：
+        // 1. 阻止回滚操作（推荐）
+        ctx.status = 400
+        ctx.body = {
+          success: false,
+          error: `回滚操作被阻止：设备缺少白名单配置，为防止数据丢失，请先设置白名单后再进行回滚操作`
+        }
+        return
+
+        // 2. 或者使用默认的安全白名单（如果有定义的话）
+        // preservedPaths = getDefaultPreservedPaths(project)
+      }
+    } catch (error) {
+      console.warn(`获取设备 ${deviceId} 白名单配置失败:`, error.message)
+
+      // 白名单配置获取失败时也应该阻止回滚
+      ctx.status = 500
+      ctx.body = {
+        success: false,
+        error: `回滚操作被阻止：无法获取设备白名单配置，为防止数据丢失，请检查设备配置后重试`
+      }
+      return
+    }
+
+    // 创建单设备回滚任务记录
+    const batchTaskManager = await initializeBatchTaskManager()
+    const taskId = await batchTaskManager.createRollbackTask({
+      deviceIds: [deviceId],
+      project,
+      preservedPaths, // 传递白名单配置
+      sessionId, // 传递会话ID以支持进度追踪
+      creator: ctx.state.user?.username || 'system',
+      scope: 'single'
+    })
+
+    // 异步执行回滚任务（不等待完成，立即返回）
+    batchTaskManager.executeTask(taskId).catch(error => {
+      ErrorLogger.logError('单设备回滚任务执行失败', error, { taskId, deviceId })
+      console.error(`❌ 单设备回滚任务执行失败: ${taskId}`, error.message)
+    })
+
+    console.log(`✅ 单设备回滚任务已创建并启动: ${taskId}`)
+
+    ctx.body = {
+      success: true,
+      message: '回滚命令已发送',
+      taskId,
+      sessionId
+    }
+
+  } catch (error) {
+    ErrorLogger.logError('单设备回滚失败', error, { deviceId: ctx.params.deviceId })
+    ctx.status = 500
+    ctx.body = {
+      success: false,
+      error: process.env.NODE_ENV === 'production' ? '回滚失败' : error.message
+    }
+  }
+}
+
+export { getDevices, sendCommand, upgradeDevice, rollbackDevice }

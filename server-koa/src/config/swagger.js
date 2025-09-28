@@ -104,7 +104,6 @@ const swaggerOptions = {
 
             // 网络信息（扁平化）
             wifiName: { type: 'string', nullable: true, description: 'WiFi 名称' },
-            wifiSignal: { type: 'number', nullable: true, description: 'WiFi 信号强度' },
             localIp: { type: 'string', nullable: true, description: '本地 IP' },
             macAddresses: {
               type: 'array',

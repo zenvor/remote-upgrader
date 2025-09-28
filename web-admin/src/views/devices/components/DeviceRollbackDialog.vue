@@ -72,6 +72,19 @@
             </div>
           </template>
         </a-alert>
+
+        <!-- 白名单保护警告 -->
+        <a-alert type="error" message="🚨 白名单保护重要提醒" show-icon style="margin-top: 12px">
+          <template #description>
+            <div>
+              <p><strong>回滚操作会清空目标目录并恢复备份文件：</strong></p>
+              <p>• 系统会使用设备上次升级时保存的<strong>白名单配置</strong>来保护重要文件</p>
+              <p>• 如果设备<strong>从未进行过升级</strong>或<strong>缺少白名单配置</strong>，回滚可能会<strong style="color: #ff4d4f">删除所有文件</strong></p>
+              <p>• 建议在回滚前确认设备已有正确的白名单配置</p>
+              <p>• 如有疑问，请先进行一次带白名单的升级操作以保存白名单配置</p>
+            </div>
+          </template>
+        </a-alert>
       </a-card>
     </div>
   </a-modal>
@@ -258,9 +271,14 @@ const performRollback = async () => {
           : []
       })
     } else {
+      // 批量回滚也需要生成 sessionId
+      const sessionId = generateSessionId()
+      console.log(`🔄 开始批量回滚，会话ID: ${sessionId}，设备数量: ${target.length}`)
+
       const payload = {
         deviceIds: target.map((device) => device.deviceId),
-        project
+        project,
+        sessionId
       }
 
       const response = await batchApi.createBatchRollback(payload)
@@ -269,7 +287,11 @@ const performRollback = async () => {
         type: 'batch',
         operationType: 'rollback',
         devices: [...target],
-        sessions: [],
+        sessions: [{
+          sessionId,
+          deviceIds: target.map(d => d.deviceId),
+          taskId: response.taskId
+        }],
         taskId: response.taskId,
         response
       })

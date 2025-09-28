@@ -11,8 +11,8 @@ const __dirname = path.dirname(__filename)
 // 安全常量
 const SECURITY_CONSTANTS = {
   allowedExtensions: ['.zip', '.tar', '.gz', '.tgz'],
-  maxFileNameLength: 100,
-  forbiddenChars: /[<>:"/|?*\u0000-\u001f]/g,
+  maxFileNameLength: 100, // 字符数量限制，不是字节限制
+  forbiddenChars: /[<>:"/|?*\u0000-\u001f]/g, // 移除了反斜杠，保留中文字符
   pathTraversalPattern: /\.\.|\//g
 }
 
@@ -45,9 +45,19 @@ async function directUpload(ctx) {
   // Multer 中间件将文本字段放在 ctx.request.body，文件放在 ctx.file
   // 仅在开发环境显示调试信息
   if (process.env.NODE_ENV !== 'production') {
-    console.log('调试信息 - ctx.request.body:', ctx.request.body)
-    console.log('调试信息 - ctx.file:', ctx.file)
-    console.log('调试信息 - project 类型:', typeof ctx.request.body.project)
+    console.log('📋 上传调试信息:')
+    console.log('  - 请求体:', ctx.request.body)
+    console.log('  - 文件信息:', {
+      原始文件名: ctx.file?.originalname,
+      文件大小: ctx.file?.size,
+      文件类型: ctx.file?.mimetype,
+      编码: ctx.file?.encoding
+    })
+    console.log('  - 文件名字节分析:', {
+      原始长度: ctx.file?.originalname?.length,
+      字节长度: Buffer.byteLength(ctx.file?.originalname || '', 'utf8'),
+      十六进制: Buffer.from(ctx.file?.originalname || '', 'utf8').toString('hex')
+    })
   }
 
   const { project } = ctx.request.body
@@ -82,12 +92,25 @@ async function directUpload(ctx) {
     // 安全验证文件名
     const safeFileName = sanitizeFileName(file.originalname)
     if (!safeFileName) {
+      console.warn('文件名验证失败:', {
+        原始文件名: file.originalname,
+        原始文件名编码: Buffer.from(file.originalname || '', 'utf8').toString('hex')
+      })
       ctx.status = 400
       ctx.body = {
         success: false,
-        error: '文件名无效或包含非法字符'
+        error: '文件名无效或包含非法字符，请使用合法的文件名'
       }
       return
+    }
+
+    // 输出文件名处理结果
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('✅ 文件名处理结果:', {
+        原始文件名: file.originalname,
+        安全文件名: safeFileName,
+        是否相同: file.originalname === safeFileName
+      })
     }
 
     // 检查文件扩展名
@@ -188,32 +211,44 @@ async function directUpload(ctx) {
 }
 
 /**
- * 清理文件名，防止路径遭历攻击
+ * 清理文件名，防止路径遭历攻击，支持中文文件名
  */
 function sanitizeFileName(fileName) {
   if (!fileName || typeof fileName !== 'string') {
     return null
   }
 
-  // 检查文件名长度
-  if (fileName.length > SECURITY_CONSTANTS.maxFileNameLength) {
+  // 确保文件名是正确的 UTF-8 编码
+  try {
+    // 通过 Buffer 处理确保正确的 UTF-8 编码
+    const normalizedFileName = Buffer.from(fileName, 'utf8').toString('utf8')
+
+    // 检查文件名长度（以字节为单位，支持中文）
+    const fileNameBytes = Buffer.byteLength(normalizedFileName, 'utf8')
+    if (fileNameBytes > SECURITY_CONSTANTS.maxFileNameLength * 3) { // 中文字符最多3字节
+      return null
+    }
+
+    // 移除路径遭历字符
+    if (SECURITY_CONSTANTS.pathTraversalPattern.test(normalizedFileName)) {
+      return null
+    }
+
+    // 移除禁止的字符，但保留中文字符
+    // 更新正则表达式，只移除真正危险的字符，保留中文
+    const safeCharPattern = /[<>:"|?*\u0000-\u001f]/g
+    const cleaned = normalizedFileName.replace(safeCharPattern, '')
+
+    // 检查清理后的文件名是否仍然有效
+    if (!cleaned || cleaned.length === 0 || cleaned.startsWith('.')) {
+      return null
+    }
+
+    return cleaned
+  } catch (error) {
+    console.warn('文件名编码处理失败:', error.message, '原始文件名:', fileName)
     return null
   }
-
-  // 移除路径遭历字符
-  if (SECURITY_CONSTANTS.pathTraversalPattern.test(fileName)) {
-    return null
-  }
-
-  // 移除禁止的字符
-  const cleaned = fileName.replace(SECURITY_CONSTANTS.forbiddenChars, '')
-
-  // 检查清理后的文件名是否仍然有效
-  if (!cleaned || cleaned.length === 0 || cleaned.startsWith('.')) {
-    return null
-  }
-
-  return cleaned
 }
 
 export { directUpload }

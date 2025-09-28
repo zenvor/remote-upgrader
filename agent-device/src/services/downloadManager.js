@@ -4,6 +4,7 @@ import fs from 'fs-extra'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { ErrorLogger } from '../utils/common.js'
+import logger from '../utils/logger.js'
 
 export default class DownloadManager {
   constructor(config) {
@@ -51,7 +52,7 @@ export default class DownloadManager {
       throw new Error('project 和 fileName 参数不能为空')
     }
 
-    console.log(`开始下载包: ${project}/${fileName}`)
+    logger.debug(`开始下载包: ${project}/${fileName}`)
 
     try {
       // 报告开始下载进度
@@ -70,7 +71,7 @@ export default class DownloadManager {
       // 2. 检查是否已存在且完整
       const expectedMd5 = packageInfo.fileMD5
       if (await this.isFileComplete(targetPath, expectedMd5)) {
-        console.log('文件已存在且完整，跳过下载')
+        logger.debug('文件已存在且完整，跳过下载')
         if (progressCallback) {
           progressCallback('downloading', 100, '文件已存在，跳过下载')
         }
@@ -124,7 +125,7 @@ export default class DownloadManager {
   }
 
   async downloadWithResume(project, fileName, packageInfo, targetPath, progressCallback = null) {
-    console.log('开始断点续传下载...')
+    logger.debug('开始断点续传下载...')
 
     const temporaryPath = path.join(this.tempDir, `${project}-${fileName}`)
     await fs.ensureDir(path.dirname(temporaryPath))
@@ -138,7 +139,7 @@ export default class DownloadManager {
       let downloadedBytes = 0
 
       if (existingSize > 0) {
-        console.log(`检测到未完成下载，继续从 ${existingSize} 字节开始`)
+        logger.debug(`检测到未完成下载，继续从 ${existingSize} 字节开始`)
         downloadedBytes = existingSize
       }
 
@@ -162,6 +163,21 @@ export default class DownloadManager {
       const totalBytes = Number.parseInt(response.headers['content-length'] || '0') + downloadedBytes
 
       return new Promise((resolve, reject) => {
+        // 中文注释：统一处理失败，确保不会重复执行 reject
+        let hasFailed = false
+        const finalizeFailure = (error) => {
+          if (hasFailed) return
+          hasFailed = true
+          try {
+            if (writeStream) {
+              writeStream.destroy()
+            }
+          } catch {
+            // 写入流销毁失败忽略
+          }
+          reject(error)
+        }
+
         // 正确创建写入流
         writeStream =
           downloadedBytes > 0
@@ -183,13 +199,16 @@ export default class DownloadManager {
             if (progressCallback) {
               progressCallback('downloading', progress, `下载中... ${(receivedBytes / (1024 * 1024)).toFixed(1)}MB/${(totalBytes / (1024 * 1024)).toFixed(1)}MB`)
             }
-            process.stdout.write(`\r下载进度: ${progress.toFixed(1)}% (${receivedBytes}/${totalBytes} bytes)`)
             lastProgressTime = now
           }
         })
 
         writeStream.on('finish', async () => {
-          console.log('\n下载完成，验证文件完整性...')
+          if (hasFailed) {
+            return
+          }
+
+          logger.debug('\n下载完成，验证文件完整性...')
           if (progressCallback) {
             progressCallback('downloading', 90, '验证文件完整性...')
           }
@@ -202,10 +221,14 @@ export default class DownloadManager {
               throw new Error(`文件校验失败，期望: ${expectedMd5}，实际: ${fileMd5}`)
             }
 
+            if (!(await fs.pathExists(temporaryPath))) {
+              throw new Error('临时文件丢失，无法完成下载')
+            }
+
             // 移动到最终位置
             await fs.move(temporaryPath, targetPath, { overwrite: true })
 
-            console.log('文件下载并验证成功')
+            logger.debug('文件下载并验证成功')
             if (progressCallback) {
               progressCallback('downloading', 100, '下载完成')
             }
@@ -215,18 +238,18 @@ export default class DownloadManager {
               cached: false
             })
           } catch (error) {
-            reject(error)
+            finalizeFailure(error)
           }
         })
 
         writeStream.on('error', (error) => {
           ErrorLogger.logError('写入流错误', error, { temporaryPath })
-          reject(error)
+          finalizeFailure(error)
         })
 
         response.data.on('error', (error) => {
           ErrorLogger.logError('下载流错误', error, { downloadUrl })
-          reject(error)
+          finalizeFailure(error)
         })
       })
     } catch (error) {
@@ -287,7 +310,7 @@ export default class DownloadManager {
 
           if (now - stats.mtimeMs > this.constants.tempFileMaxAge) {
             await fs.remove(filePath)
-            console.log(`清理临时文件: ${file}`)
+            logger.debug(`清理临时文件: ${file}`)
             return { success: true, file, action: 'deleted' }
           }
           return { success: true, file, action: 'kept' }
@@ -304,7 +327,7 @@ export default class DownloadManager {
         (r) => r.status === 'fulfilled' && r.value.success && r.value.action === 'deleted'
       ).length
 
-      console.log(`✅ 临时文件清理完成: 处理 ${successCount}/${files.length} 个文件，删除 ${deletedCount} 个过期文件`)
+      logger.debug(`✅ 临时文件清理完成: 处理 ${successCount}/${files.length} 个文件，删除 ${deletedCount} 个过期文件`)
     } catch (error) {
       ErrorLogger.logError('清理临时文件失败', error, { tempDir: this.tempDir })
     }

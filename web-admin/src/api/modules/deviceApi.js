@@ -39,16 +39,26 @@ export const sendDeviceCommand = (deviceId, command, data = {}) => {
   })
 }
 
-// 升级设备
+// 升级设备（新接口，会在任务管理中心记录）
 export const upgradeDevice = (deviceId, upgradeData) => {
+  return request.post(`/devices/${deviceId}/upgrade`, upgradeData)
+}
+
+// 升级设备（旧接口，仅发送命令，不记录任务）
+export const upgradeDeviceCommand = (deviceId, upgradeData) => {
   return request.post(`/devices/${deviceId}/command`, {
     command: 'cmd:upgrade',
     data: upgradeData
   })
 }
 
-// 回滚设备（回退至上一个备份版本）
-export const rollbackDevice = (deviceId, projectOrOptions) => {
+// 回滚设备（新接口，会在任务管理中心记录）
+export const rollbackDevice = (deviceId, rollbackData) => {
+  return request.post(`/devices/${deviceId}/rollback`, rollbackData)
+}
+
+// 回滚设备（旧接口，仅发送命令，不记录任务）
+export const rollbackDeviceCommand = (deviceId, projectOrOptions) => {
   const payload =
     projectOrOptions && typeof projectOrOptions === 'object'
       ? projectOrOptions

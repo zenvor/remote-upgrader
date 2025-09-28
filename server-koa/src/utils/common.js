@@ -1,5 +1,7 @@
 // 通用工具函数 - 提取重复代码模式
 import fs from 'fs-extra'
+import path from 'node:path'
+import logger from './logger.js'
 
 /**
  * 统一的错误日志记录器
@@ -19,7 +21,7 @@ export const ErrorLogger = {
             .join(', ')}]`
         : ''
 
-    console.error(`${operation}失败${contextString}:`, error.message || error)
+    logger.error(`${operation}失败${contextString}:`, error.message || error)
   },
 
   /**
@@ -36,7 +38,7 @@ export const ErrorLogger = {
             .join(', ')}]`
         : ''
 
-    console.warn(`⚠️ ${operation}${contextString}: ${message}`)
+    logger.warn(`${operation}${contextString}: ${message}`)
   },
 
   /**
@@ -52,7 +54,7 @@ export const ErrorLogger = {
             .join(', ')}]`
         : ''
 
-    console.log(`✅ ${operation}成功${contextString}`)
+    logger.info(`${operation}成功${contextString}`)
   }
 }
 
@@ -102,7 +104,7 @@ export const FileHelper = {
    */
   async safeWriteJson(filePath, data, options = { spaces: 2 }) {
     try {
-      await fs.ensureDir(require('node:path').dirname(filePath))
+      await fs.ensureDir(path.dirname(filePath))
       await fs.writeJson(filePath, data, options)
       return true
     } catch (error) {
@@ -200,6 +202,30 @@ export const DateHelper = {
    */
   getCurrentDate() {
     return this.formatToYYYYMMDD(new Date())
+  },
+
+  /**
+   * 格式化日期为 YYYY-MM-DD HH:mm:ss 格式
+   * @param {Date|string} date - 日期对象或ISO字符串
+   * @returns {string} YYYY-MM-DD HH:mm:ss 格式的日期时间字符串
+   */
+  formatToYYYYMMDDHHmmss(date) {
+    const d = date instanceof Date ? date : new Date(date || Date.now())
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const hour = String(d.getHours()).padStart(2, '0')
+    const minute = String(d.getMinutes()).padStart(2, '0')
+    const second = String(d.getSeconds()).padStart(2, '0')
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+  },
+
+  /**
+   * 获取当前日期时间的 YYYY-MM-DD HH:mm:ss 格式字符串
+   * @returns {string}
+   */
+  getCurrentDateTime() {
+    return this.formatToYYYYMMDDHHmmss(new Date())
   }
 }
 

@@ -209,7 +209,7 @@ router.post('/upgrade', createBatchUpgrade)
  *                 type: array
  *                 items:
  *                   type: string
- *                 description: 目标设备ID列表
+ *                 description: 目标设备ID列表，系统会自动读取并应用每台设备的白名单配置
  *                 example: ["device001", "device002", "device003"]
  *               project:
  *                 type: string
@@ -246,7 +246,18 @@ router.post('/upgrade', createBatchUpgrade)
  *                       type: integer
  *                       example: 2
  *       400:
- *         description: 请求参数错误
+ *         description: 请求参数错误或设备缺少白名单配置
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   example: "以下设备缺少白名单配置，已阻止回滚：device001, device004"
  *       500:
  *         description: 服务器内部错误
  */

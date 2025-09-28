@@ -154,16 +154,12 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { deviceApi, packageApi } from '@/api'
+import { deviceApi, packageApi, batchApi } from '@/api'
 import toast from '@/utils/toast'
 import { CloudOutlined, HddOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 import { generateSessionId } from '@/utils/progressTypes.js'
 import { Modal } from 'ant-design-vue'
-import {
-  resolveDevicePreservedPaths,
-  getPreservedPathsSource,
-  getEnvPreservedPaths
-} from '@/utils/deployConfig.js'
+import { resolveDevicePreservedPaths, getPreservedPathsSource, getEnvPreservedPaths } from '@/utils/deployConfig.js'
 
 // Props
 const props = defineProps({
@@ -237,26 +233,40 @@ const upgradeDevice = async (device, project, packageInfo = null, options = {}) 
   }
 }
 
-// 批量升级
+// 批量升级 - 使用真正的批量升级接口
 const batchUpgrade = async (deviceList, project, packageInfo, options = {}) => {
   try {
-    const sessionResults = await Promise.all(
-      deviceList.map((device) => upgradeDevice(device, project, packageInfo, options))
-    )
+    // 生成会话ID用于批量操作进度追踪
+    const sessionId = generateSessionId()
+    console.log(`🚀 开始批量升级，会话ID: ${sessionId}，设备数量: ${deviceList.length}`)
 
-    const sessions = sessionResults
-      .map((result, index) => ({
-        sessionId: result?.sessionId,
-        deviceId: deviceList[index]?.deviceId,
-        deviceName: deviceList[index]?.deviceName,
-        taskId: result?.response?.taskId || null
-      }))
-      .filter((item) => item.sessionId && item.deviceId)
+    const payload = {
+      deviceIds: deviceList.map((device) => device.deviceId),
+      packageFileName: packageInfo.fileName,
+      project,
+      deployPath: options.deployPath || undefined,
+      preservedPaths: options.preservedPaths || [],
+      sessionId // 传递会话ID给后端
+    }
+
+    console.log('🔧 批量升级数据:', payload)
+
+    const response = await batchApi.createBatchUpgrade(payload)
 
     console.log(`批量升级完成，共 ${deviceList.length} 个设备`)
+
+    // 返回格式与原来保持一致
+    const sessions = [
+      {
+        sessionId,
+        deviceIds: deviceList.map((d) => d.deviceId),
+        taskId: response.taskId
+      }
+    ]
+
     return {
       sessions,
-      responses: sessionResults
+      responses: [response]
     }
   } catch (error) {
     console.error('批量升级失败:', error)
@@ -554,6 +564,9 @@ const performUpgrade = async () => {
 
     let successPayload = null
 
+    // 立即关闭对话框，不等待升级完成
+    open.value = false
+
     if (target.length === 1) {
       const sessionResult = await upgradeDevice(target[0], project, packageInfo, options)
       toast.success(`设备 "${target[0].deviceName}" 升级操作已启动`, '升级开始')
@@ -590,11 +603,11 @@ const performUpgrade = async () => {
     }
 
     emit('success', successPayload)
-    // 关闭对话框
-    open.value = false
   } catch (error) {
     console.error('升级失败:', error)
     toast.error('升级操作失败', '错误')
+    // 错误情况下也需要关闭弹框
+    open.value = false
   } finally {
     upgrading.value = false
   }
@@ -619,8 +632,11 @@ const handleSubmit = async () => {
     content: confirmContent,
     okText: '开始升级',
     cancelText: '取消',
-    onOk: async () => {
-      await performUpgrade()
+    onOk: () => {
+      // 不使用 await，让确认框立即关闭
+      performUpgrade().catch((error) => {
+        console.error('升级执行失败:', error)
+      })
     }
   })
 }

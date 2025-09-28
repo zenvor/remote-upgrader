@@ -23,8 +23,10 @@ import docsRouter from './routes/docs.js'
 import packageRouter from './routes/packages.js'
 import uploadRouter from './routes/upload.js'
 import versionRouter from './routes/versions.js'
+import logger, { patchConsole } from './utils/logger.js'
 
 dotenv.config()
+patchConsole()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -102,7 +104,7 @@ app.use(async (ctx, next) => {
   try {
     await next()
   } catch (error) {
-    console.error('请求处理错误:', error)
+    logger.error('请求处理错误:', error)
 
     // 确定错误状态码
     const status = error.status || error.statusCode || 500
@@ -123,7 +125,7 @@ app.use(async (ctx, next) => {
 
     // 记录详细错误信息（仅服务端）
     if (status >= 500) {
-      console.error('服务器错误详情:', {
+      logger.debug('服务器错误详情:', {
         message: error.message,
         stack: error.stack,
         url: ctx.url,
@@ -187,13 +189,13 @@ async function ensureDirectories() {
     const dirPromises = dirs.map(async (dir) => {
       const targetPath = path.join(__dirname, '..', dir)
       await fs.ensureDir(targetPath)
-      console.log(`✅ 目录确保存在: ${targetPath}`)
+      logger.debug(`目录确保存在: ${targetPath}`)
       return targetPath
     })
 
     await Promise.all(dirPromises)
   } catch (error) {
-    console.error('❌ 创建必要目录失败:', error)
+    logger.error('创建必要目录失败:', error)
     throw error
   }
 }
@@ -218,10 +220,14 @@ export async function start() {
       if (error) {
         reject(error)
       } else {
-        console.log(`🚀 远程升级系统服务已启动`)
-        console.log(`📍 监听地址: ${host}:${port}`)
-        console.log(`📖 API文档: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/api-docs`)
-        console.log(`🌍 环境: ${process.env.NODE_ENV || 'development'}`)
+        logger.info('远程升级系统服务已启动', {
+          host,
+          port,
+          env: process.env.NODE_ENV || 'development'
+        })
+        logger.info('API 文档地址', {
+          url: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/api-docs`
+        })
         resolve({ host, port })
       }
     })
@@ -236,7 +242,9 @@ const isMain = argvPath && argvPath === fileURLToPath(import.meta.url)
 const isPm2 = !!process.env.pm_id
 
 if (isMain || isPm2) {
-  start().catch(console.error)
+  start().catch((error) => {
+    logger.error('服务启动失败:', error)
+  })
 }
 
 export { app, io, server }

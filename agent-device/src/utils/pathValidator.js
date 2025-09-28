@@ -2,6 +2,7 @@
 import fs from 'fs-extra'
 import path from 'node:path'
 import { ErrorLogger } from './common.js'
+import logger from './logger.js'
 
 /**
  * 路径安全验证器
@@ -101,7 +102,7 @@ export class PathValidator {
         }
       }
 
-      console.log(`✅ 路径安全检查通过 (${operation}): ${resolvedPath}`)
+      logger.debug(`✅ 路径安全检查通过 (${operation}): ${resolvedPath}`)
       return {
         valid: true,
         sanitizedPath: resolvedPath

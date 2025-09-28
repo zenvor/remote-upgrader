@@ -103,31 +103,6 @@ export class MessageRouter {
     return this.sendToDevices(deviceIds, 'device:command', commandData)
   }
 
-  /**
-   * 发送升级命令
-   */
-  sendUpgradeCommand(deviceId, upgradeInfo) {
-    const upgradeData = {
-      ...upgradeInfo,
-      timestamp: new Date().toISOString(),
-      messageId: this.generateMessageId()
-    }
-
-    return this.sendToDevice(deviceId, 'cmd:upgrade', upgradeData)
-  }
-
-  /**
-   * 发送回滚命令
-   */
-  sendRollbackCommand(deviceId, rollbackInfo = {}) {
-    const rollbackData = {
-      ...rollbackInfo,
-      timestamp: new Date().toISOString(),
-      messageId: this.generateMessageId()
-    }
-
-    return this.sendToDevice(deviceId, 'cmd:rollback', rollbackData)
-  }
 
   /**
    * 查询设备状态

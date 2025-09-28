@@ -2,6 +2,7 @@
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import fs from 'fs-extra'
+import logger from './logger.js'
 
 /**
  * 统一的错误日志记录器
@@ -31,7 +32,7 @@ export const ErrorLogger = {
             .join(', ')}]`
         : ''
 
-    console.error(`${operation}失败${contextString}:`, error.message || error)
+    logger.error(`${operation}失败${contextString}:`, error.message || error)
   },
 
   /**
@@ -55,7 +56,7 @@ export const ErrorLogger = {
             .join(', ')}]`
         : ''
 
-    console.warn(`⚠️ ${operation}${contextString}: ${message}`)
+    logger.warn(`${operation}${contextString}: ${message}`)
   },
 
   /**
@@ -75,7 +76,7 @@ export const ErrorLogger = {
             .join(', ')}]`
         : ''
 
-    console.log(`✅ ${operation}成功${contextString}`)
+    logger.info(`${operation}成功${contextString}`)
   }
 }
 

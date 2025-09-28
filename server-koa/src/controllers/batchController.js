@@ -2,6 +2,7 @@
 import BatchTaskManager, { TASK_STATUS, TASK_TYPE } from '../models/batchTaskManager.js'
 import deviceManager from '../models/deviceManager.js'
 import { getPackageConfig } from '../models/packageConfig.js'
+import { getDevicePreservedPaths } from '../models/deviceStorage.js'
 import { ErrorLogger } from '../utils/common.js'
 
 // 全局批量任务管理器实例
@@ -12,9 +13,11 @@ let batchTaskManager = null
  */
 export async function initializeBatchTaskManager() {
   try {
-    batchTaskManager = new BatchTaskManager(deviceManager, deviceManager)
-    await batchTaskManager.initialize()
-    console.log('✅ 批量任务管理器初始化成功')
+    if (!batchTaskManager) {
+      batchTaskManager = new BatchTaskManager(deviceManager, deviceManager)
+      await batchTaskManager.initialize()
+      console.log('✅ 批量任务管理器初始化成功')
+    }
     return batchTaskManager
   } catch (error) {
     ErrorLogger.logError('批量任务管理器初始化失败', error)
@@ -42,7 +45,8 @@ async function createBatchUpgrade(ctx) {
       packageFileName,
       project,
       deployPath: rawDeployPath,
-      preservedPaths: rawPreservedPaths
+      preservedPaths: rawPreservedPaths,
+      sessionId
     } = ctx.request.body
 
     // 参数验证
@@ -123,6 +127,7 @@ async function createBatchUpgrade(ctx) {
       project,
       deployPath,
       preservedPaths,
+      sessionId, // 传递会话ID以支持进度追踪
       creator: ctx.state.user?.username || 'system'
     })
 
@@ -157,7 +162,7 @@ async function createBatchUpgrade(ctx) {
  */
 async function createBatchRollback(ctx) {
   try {
-    const { deviceIds, project } = ctx.request.body
+    const { deviceIds, project, sessionId } = ctx.request.body
 
     // 参数验证
     if (!deviceIds || !Array.isArray(deviceIds) || deviceIds.length === 0) {
@@ -192,12 +197,47 @@ async function createBatchRollback(ctx) {
       return
     }
 
+    // 读取每台设备的白名单配置
+    const devicePreservedPaths = {}
+    const devicesMissingWhitelist = []
+
+    for (const deviceId of validDeviceIds) {
+      try {
+        const preserved = await getDevicePreservedPaths(deviceId, project)
+        const cleaned = Array.isArray(preserved)
+          ? preserved
+              .map((item) => (typeof item === 'string' ? item.trim() : ''))
+              .filter((item) => item.length > 0)
+          : []
+
+        if (cleaned.length === 0) {
+          devicesMissingWhitelist.push(deviceId)
+        } else {
+          devicePreservedPaths[deviceId] = cleaned
+        }
+      } catch (error) {
+        ErrorLogger.logWarning('读取白名单失败', error.message, { deviceId, project })
+        devicesMissingWhitelist.push(deviceId)
+      }
+    }
+
+    if (devicesMissingWhitelist.length > 0) {
+      ctx.status = 400
+      ctx.body = {
+        success: false,
+        error: `以下设备缺少白名单配置，已阻止回滚：${devicesMissingWhitelist.join(', ')}`
+      }
+      return
+    }
+
     // 创建回滚任务
     const taskManager = getBatchTaskManager()
     const taskId = await taskManager.createRollbackTask({
       deviceIds: validDeviceIds,
       project,
-      creator: ctx.state.user?.username || 'system'
+      sessionId, // 传递会话ID以支持进度追踪
+      creator: ctx.state.user?.username || 'system',
+      devicePreservedPaths
     })
 
     // 异步执行任务

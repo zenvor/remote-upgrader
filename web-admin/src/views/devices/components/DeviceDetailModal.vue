@@ -145,15 +145,6 @@
               <span class="info-value">{{ device.wifiName || '未连接' }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">信号强度</span>
-              <div class="signal-info">
-                <span class="info-value">{{ device.wifiSignal ? `${device.wifiSignal} dBm` : '未知' }}</span>
-                <span v-if="device.wifiSignal" class="signal-badge" :class="getWifiSignalClass(device.wifiSignal)">
-                  {{ getWifiSignalLabel(device.wifiSignal) }}
-                </span>
-              </div>
-            </div>
-            <div class="info-item">
               <span class="info-label">内网IP</span>
               <span class="info-value code">{{ device.localIp || '未知' }}</span>
             </div>
@@ -279,21 +270,6 @@ const formatDuration = (totalSeconds) => {
 }
 
 
-// WiFi信号强度标签
-const getWifiSignalLabel = (signal) => {
-  if (signal >= -50) return '优秀'
-  if (signal >= -60) return '良好'
-  if (signal >= -70) return '一般'
-  return '较弱'
-}
-
-// WiFi信号强度样式类
-const getWifiSignalClass = (signal) => {
-  if (signal >= -50) return 'bg-green-100 text-green-800'
-  if (signal >= -60) return 'bg-blue-100 text-blue-800'
-  if (signal >= -70) return 'bg-yellow-100 text-yellow-800'
-  return 'bg-red-100 text-red-800'
-}
 </script>
 
 <style scoped>
@@ -418,20 +394,6 @@ const getWifiSignalClass = (signal) => {
 .info-value.duration {
   color: #13c2c2;
   font-weight: 600;
-}
-
-/* 信号强度特殊样式 */
-.signal-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.signal-badge {
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 500;
 }
 
 /* 状态标签 */

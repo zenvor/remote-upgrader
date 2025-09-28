@@ -41,7 +41,18 @@ class DeviceManager {
           status: 'offline', // 重启后所有设备都是离线状态
           connectedAt: null,
           lastHeartbeat: null,
-          disconnectedAt: deviceData.status.lastHeartbeat
+          disconnectedAt: deviceData.status.lastHeartbeat,
+          // 重启后清除进度状态
+          currentOperation: {
+            type: null,
+            sessionId: null,
+            step: null,
+            progress: 0,
+            message: null,
+            startTime: null,
+            error: null,
+            metadata: null
+          }
         })
 
         // 同步离线状态到存储
@@ -70,7 +81,6 @@ class DeviceManager {
       deviceId,
       deviceName,
       wifiName,
-      wifiSignal,
       localIp,
       macAddresses,
       // 分组字段（优先）
@@ -116,7 +126,6 @@ class DeviceManager {
         },
         network: {
           wifiName: network.wifiName ?? existingInfo?.network?.wifiName ?? null,
-          wifiSignal: network.wifiSignal ?? existingInfo?.network?.wifiSignal ?? null,
           localIp: network.localIp ?? existingInfo?.network?.localIp ?? null,
           macAddresses: Array.isArray(network.macAddresses)
             ? network.macAddresses
@@ -140,7 +149,18 @@ class DeviceManager {
       },
       status: 'online',
       connectedAt: new Date(),
-      lastHeartbeat: new Date()
+      lastHeartbeat: new Date(),
+      // 当前操作进度信息
+      currentOperation: {
+        type: null, // upgrade, rollback, null
+        sessionId: null,
+        step: null,
+        progress: 0,
+        message: null,
+        startTime: null,
+        error: null,
+        metadata: null
+      }
     }
 
     // 检查设备容量限制
@@ -154,7 +174,6 @@ class DeviceManager {
     // 先保存设备信息到持久化存储，然后再记录连接事件
     this._saveDeviceInfoAndConnectionAsync(deviceId, device.info, {
       wifiName: network.wifiName || wifiName,
-      wifiSignal: network.wifiSignal || wifiSignal,
       localIp: network.localIp || localIp,
       macAddresses: network.macAddresses || macAddresses
     })
@@ -213,7 +232,6 @@ class DeviceManager {
           },
           network: {
             wifiName: device.info.network?.wifiName ?? null,
-            wifiSignal: device.info.network?.wifiSignal ?? null,
             localIp: device.info.network?.localIp ?? null,
             macAddresses: device.info.network?.macAddresses ?? []
           },
@@ -255,7 +273,6 @@ class DeviceManager {
         },
         network: {
           wifiName: device.info.network?.wifiName ?? null,
-          wifiSignal: device.info.network?.wifiSignal ?? null,
           localIp: device.info.network?.localIp ?? null,
           macAddresses: device.info.network?.macAddresses ?? []
         },
@@ -265,7 +282,17 @@ class DeviceManager {
         status: device.status,
         connectedAt: device.connectedAt,
         disconnectedAt: device.disconnectedAt,
-        lastHeartbeat: device.lastHeartbeat
+        lastHeartbeat: device.lastHeartbeat,
+        // 当前操作进度信息
+        currentOperation: device.currentOperation ? {
+          type: device.currentOperation.type,
+          sessionId: device.currentOperation.sessionId,
+          step: device.currentOperation.step,
+          progress: device.currentOperation.progress,
+          message: device.currentOperation.message,
+          startTime: device.currentOperation.startTime,
+          error: device.currentOperation.error
+        } : null
       })
     }
 
@@ -278,10 +305,9 @@ class DeviceManager {
   updateNetworkInfo(deviceId, network) {
     const device = this.devices.get(deviceId)
     if (device) {
-      const { wifiName, wifiSignal, localIp, macAddresses } = network
+      const { wifiName, localIp, macAddresses } = network
       device.info.network = device.info.network || {}
       if (wifiName !== undefined) device.info.network.wifiName = wifiName
-      if (wifiSignal !== undefined) device.info.network.wifiSignal = wifiSignal
 
       if (localIp !== undefined) device.info.network.localIp = localIp || device.info.network.localIp || null
       if (Array.isArray(macAddresses)) device.info.network.macAddresses = macAddresses
@@ -290,7 +316,6 @@ class DeviceManager {
       // 将网络信息同步到持久化存储
       this._updateHeartbeatAsync(deviceId, {
         wifiName,
-        wifiSignal,
         localIp,
         macAddresses
       })
@@ -387,6 +412,66 @@ class DeviceManager {
     }
 
     return results
+  }
+
+  /**
+   * 更新设备操作进度
+   */
+  updateDeviceOperationProgress(deviceId, progressData) {
+    const device = this.devices.get(deviceId)
+    if (!device) {
+      console.warn(`尝试更新不存在设备的进度: ${deviceId}`)
+      return false
+    }
+
+    const { sessionId, step, progress, message, error, metadata, operationType } = progressData
+
+    // 如果是新操作，初始化操作状态
+    if (operationType && (!device.currentOperation.type || device.currentOperation.sessionId !== sessionId)) {
+      device.currentOperation.type = operationType
+      device.currentOperation.sessionId = sessionId
+      device.currentOperation.startTime = new Date().toISOString()
+      console.log(`📊 设备 ${deviceId} 开始新操作: ${operationType} [${sessionId}]`)
+    }
+
+    // 更新进度信息
+    if (step) device.currentOperation.step = step
+    if (typeof progress === 'number') device.currentOperation.progress = Math.max(0, Math.min(100, progress))
+    if (message) device.currentOperation.message = message
+    if (error) device.currentOperation.error = error
+    if (metadata) device.currentOperation.metadata = metadata
+
+    // 操作完成或失败时清除状态
+    if (progress === 100 || error || step === 'completed' || step === 'failed') {
+      setTimeout(() => {
+        if (device.currentOperation.sessionId === sessionId) {
+          this.clearDeviceOperationProgress(deviceId)
+        }
+      }, 5000) // 5秒后清除完成状态，让用户有时间看到结果
+    }
+
+    console.log(`📊 更新设备 ${deviceId} 进度: ${device.currentOperation.step} - ${device.currentOperation.progress}% - ${device.currentOperation.message}`)
+    return true
+  }
+
+  /**
+   * 清除设备操作进度
+   */
+  clearDeviceOperationProgress(deviceId) {
+    const device = this.devices.get(deviceId)
+    if (device) {
+      console.log(`🧹 清除设备 ${deviceId} 操作进度`)
+      device.currentOperation = {
+        type: null,
+        sessionId: null,
+        step: null,
+        progress: 0,
+        message: null,
+        startTime: null,
+        error: null,
+        metadata: null
+      }
+    }
   }
 
   /**
@@ -513,6 +598,31 @@ class DeviceManager {
     }
 
     return cleanedCount
+  }
+
+  /**
+   * 检查设备是否可以执行操作
+   */
+  canPerformOperation(deviceId) {
+    if (!this.isDeviceOnline(deviceId)) {
+      return { canPerform: false, reason: '设备不在线' }
+    }
+
+    const device = this.devices.get(deviceId)
+    if (!device) {
+      return { canPerform: false, reason: '设备不存在' }
+    }
+
+    // 检查是否有正在进行的操作
+    if (device.currentOperation && device.currentOperation.type) {
+      const currentOp = device.currentOperation.type
+      return {
+        canPerform: false,
+        reason: `设备正在执行${currentOp === 'upgrade' ? '升级' : '回滚'}操作，请稍后重试`
+      }
+    }
+
+    return { canPerform: true }
   }
 
   /**

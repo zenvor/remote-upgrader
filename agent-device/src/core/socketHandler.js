@@ -1,5 +1,6 @@
 // 中文注释：Socket 事件处理器（ESM 默认导出）
 import { DateHelper, ErrorLogger } from '../utils/common.js'
+import logger from '../utils/logger.js'
 
 export default class SocketHandler {
   constructor(socket, agent) {
@@ -80,7 +81,10 @@ export default class SocketHandler {
   }
 
   handleDeviceRegistered(data) {
-    console.log('设备注册成功:', data)
+    logger.info('设备注册成功', {
+      deviceId: data?.deviceId,
+      message: data?.message
+    })
     this.agent.reportStatus('registered')
     this.agent.updateSystemInfoAfterRegistration().catch((error) => {
       ErrorLogger.logError('注册后更新系统信息', error)
@@ -88,7 +92,10 @@ export default class SocketHandler {
   }
 
   async handleCommand(message) {
-    console.log('收到服务端命令:', message)
+    logger.info('收到服务端命令', {
+      command: message?.command,
+      messageId: message?.messageId || message?.commandId || null
+    })
 
     const command = message?.command
     const parameters = message?.params ?? message?.data ?? {}
@@ -117,7 +124,7 @@ export default class SocketHandler {
         }
 
         case 'getDeployPath': {
-          console.warn('getDeployPath 命令已废弃，不再支持')
+          logger.warn('getDeployPath 命令已废弃，不再支持')
           if (messageId) {
             this.sendCommandResult(messageId, false, 'getDeployPath 命令已废弃')
           }
@@ -126,7 +133,7 @@ export default class SocketHandler {
         }
 
         default: {
-          console.warn('未知命令:', command)
+          logger.warn('未知命令:', command)
           if (messageId) {
             this.sendCommandResult(messageId, false, '不支持的命令')
           }
@@ -141,14 +148,38 @@ export default class SocketHandler {
   }
 
   async handleUpgradeCommand(data, messageId = null) {
-    console.log('执行升级命令:', data)
-
     const commandId = messageId || data?.commandId || null
     const batchTaskId = data?.batchTaskId || null // 批量任务ID
     let sessionId = null // 在函数顶部声明，确保在 catch 块中可见
     const deviceId = this.agent?.config?.device?.id || 'unknown'
 
+    logger.info(`🎯 收到升级指令 [项目: ${data?.project || 'N/A'}] [包: ${data?.fileName || 'N/A'}] [会话: ${data?.sessionId || 'N/A'}] [消息ID: ${messageId || 'N/A'}] [批量ID: ${batchTaskId || 'N/A'}]`)
+
     try {
+      // 检查是否可以执行升级操作
+      const operationCheck = this.agent.canPerformOperation('upgrade')
+      if (!operationCheck.canPerform) {
+        const errorMessage = operationCheck.reason
+        logger.warn(`升级指令被拒绝: ${errorMessage}`)
+
+        // 通过 Socket 响应错误信息
+        if (commandId) {
+          this.socket.emit('command:response', {
+            commandId,
+            success: false,
+            error: errorMessage,
+            timestamp: new Date().toISOString()
+          })
+        }
+
+        // 批量任务状态更新
+        if (batchTaskId) {
+          this.reportBatchTaskStatus(batchTaskId, 'failed', errorMessage, 0)
+        }
+
+        return
+      }
+
       // 参数验证
       if (!data || typeof data !== 'object') {
         throw new Error('升级命令参数无效')
@@ -157,13 +188,15 @@ export default class SocketHandler {
       const { project, fileName, version, deployPath, preservedPaths = [] } = data
       sessionId = data.sessionId // 赋值给外层变量
 
+      logger.info(`📊 会话ID检查: ${sessionId ? `已收到 ${sessionId}` : '未收到会话ID'}`)
+
       if (!project || !fileName) {
         throw new Error('升级命令缺少必需参数: project, fileName')
       }
 
       // 如果有 sessionId，设置进度回调
       if (sessionId) {
-        console.log(`🔗 设置进度回调: ${sessionId}`)
+        logger.debug(`🔗 设置进度回调: ${sessionId}`)
         const deployManager = this.agent.getDeployManager()
 
         // 注册进度回调，用于实时进度更新
@@ -189,7 +222,7 @@ export default class SocketHandler {
       }
 
       // 1. 下载升级包
-      console.log('开始下载升级包...')
+      logger.debug('开始下载升级包...')
       if (batchTaskId) {
         this.reportBatchTaskProgress(batchTaskId, 20, 1, 3, '正在下载升级包...')
       }
@@ -210,7 +243,7 @@ export default class SocketHandler {
       }
 
       // 2. 部署升级包
-      console.log('开始部署升级包...')
+      logger.debug('开始部署升级包...')
       if (batchTaskId) {
         this.reportBatchTaskProgress(batchTaskId, 60, 2, 3, '正在部署升级包...')
       }
@@ -230,7 +263,7 @@ export default class SocketHandler {
 
       // 清理进度回调
       if (sessionId) {
-        console.log(`🧹 清理进度回调: ${sessionId}`)
+        logger.debug(`🧹 清理进度回调: ${sessionId}`)
         this.agent.getDeployManager().removeProgressCallback(sessionId)
       }
 
@@ -257,14 +290,14 @@ export default class SocketHandler {
         })
       }
 
-      console.log('升级完成')
+      logger.debug('升级完成')
     } catch (error) {
       ErrorLogger.logError('升级失败', error, { project: data.project, commandId, batchTaskId })
       this.agent.reportStatus('upgrade_failed')
 
       // 清理进度回调（错误情况下）
       if (sessionId) {
-        console.log(`🧹 清理进度回调（错误）: ${sessionId}`)
+        logger.debug(`🧹 清理进度回调（错误）: ${sessionId}`)
         this.agent.getDeployManager().removeProgressCallback(sessionId)
       }
 
@@ -280,36 +313,69 @@ export default class SocketHandler {
   }
 
   async handleRollbackCommand(data, messageId = null) {
-    console.log('执行降级命令:', data)
+    logger.info('📨 收到回滚命令:', JSON.stringify(data, null, 2))
 
     const commandId = messageId || data?.commandId || null
     const batchTaskId = data?.batchTaskId || null // 批量任务ID
     const deviceId = this.agent?.config?.device?.id || 'unknown'
-
-    // 参数验证
-    if (!data || typeof data !== 'object') {
-      throw new Error('回滚命令参数无效')
-    }
-
-    const { project, preservedPaths } = data
-
-    if (!project) {
-      throw new Error('回滚命令缺少必需参数: project')
-    }
-
-    const preservedPathsArray = Array.isArray(preservedPaths) ? preservedPaths : []
-    if (preservedPathsArray.length > 0) {
-      console.log(`🛡️ 回滚白名单保护: ${preservedPathsArray.join(', ')}`)
-    }
-
-    const sessionId = data?.sessionId || null
-    if (!sessionId) {
-      console.warn('⚠️ 回滚命令未提供 sessionId，无法上报精确进度')
-    }
+    const sessionId = data?.sessionId || null // 将 sessionId 声明移到方法开始处
 
     try {
+      // 检查是否可以执行回滚操作
+      const operationCheck = this.agent.canPerformOperation('rollback')
+      if (!operationCheck.canPerform) {
+        const errorMessage = operationCheck.reason
+        logger.warn(`回滚指令被拒绝: ${errorMessage}`)
+
+        // 通过 Socket 响应错误信息
+        if (commandId) {
+          this.socket.emit('command:response', {
+            commandId,
+            success: false,
+            error: errorMessage,
+            timestamp: new Date().toISOString()
+          })
+        }
+
+        // 批量任务状态更新
+        if (batchTaskId) {
+          this.reportBatchTaskStatus(batchTaskId, 'failed', errorMessage, 0)
+        }
+
+        return
+      }
+
+      // 参数验证
+      if (!data || typeof data !== 'object') {
+        throw new Error('回滚命令参数无效')
+      }
+
+      const { project, preservedPaths } = data
+
+      if (!project) {
+        throw new Error('回滚命令缺少必需参数: project')
+      }
+
+      // 📋 详细白名单接收日志
+      logger.info(`📋 设备 ${deviceId} 回滚白名单接收情况:`)
+      logger.info(`  - 原始 preservedPaths 参数: ${JSON.stringify(preservedPaths)}`)
+      logger.info(`  - preservedPaths 类型: ${typeof preservedPaths}`)
+      logger.info(`  - 是否为数组: ${Array.isArray(preservedPaths)}`)
+
+      const preservedPathsArray = Array.isArray(preservedPaths) ? preservedPaths : []
+      logger.info(`  - 解析后白名单数组: ${JSON.stringify(preservedPathsArray)}`)
+      logger.info(`  - 白名单项目数量: ${preservedPathsArray.length}`)
+
+      if (preservedPathsArray.length > 0) {
+        logger.info(`🛡️ 回滚白名单保护生效: ${preservedPathsArray.join(', ')}`)
+      } else {
+        logger.warn(`⚠️ 回滚无白名单保护 - 可能删除所有文件！`)
+      }
+      if (!sessionId) {
+        logger.warn('⚠️ 回滚命令未提供 sessionId，无法上报精确进度')
+      }
       if (sessionId) {
-        console.log(`🔗 设置回滚进度回调: ${sessionId}`)
+        logger.debug(`🔗 设置回滚进度回调: ${sessionId}`)
         const deployManager = this.agent.getDeployManager()
         deployManager.registerProgressCallback(sessionId, (progressUpdate) => {
           this.socket.emit('device:operation_progress', progressUpdate)
@@ -329,6 +395,13 @@ export default class SocketHandler {
         this.reportBatchTaskStatus(batchTaskId, 'upgrading', null, 10)
         this.reportBatchTaskProgress(batchTaskId, 30, 1, 2, '正在执行回滚...')
       }
+
+      // 🚀 调用回滚方法前的最终日志
+      logger.info(`🚀 调用 deployManager.rollback():`)
+      logger.info(`  - 项目: ${project}`)
+      logger.info(`  - 目标版本: null (最新备份)`)
+      logger.info(`  - 白名单数组: ${JSON.stringify(preservedPathsArray)}`)
+      logger.info(`  - 会话ID: ${sessionId}`)
 
       const rollbackResult = await this.agent.getDeployManager().rollback(project, null, preservedPathsArray, sessionId)
 
@@ -359,7 +432,7 @@ export default class SocketHandler {
         })
       }
 
-      console.log('回滚完成')
+      logger.debug('回滚完成')
     } catch (error) {
       ErrorLogger.logError('回滚失败', error, { project: data.project, commandId, batchTaskId })
       this.agent.reportStatus('rollback_failed')
@@ -373,14 +446,14 @@ export default class SocketHandler {
       }
     } finally {
       if (sessionId) {
-        console.log(`🧹 清理回滚进度回调: ${sessionId}`)
+        logger.debug(`🧹 清理回滚进度回调: ${sessionId}`)
         this.agent.getDeployManager().removeProgressCallback(sessionId)
       }
     }
   }
 
   async handleStatusCommand(data, messageId = null) {
-    console.log('查询设备状态:', data)
+    logger.debug('查询设备状态:', data)
 
     const commandId = messageId || data?.commandId || null
 
@@ -419,9 +492,9 @@ export default class SocketHandler {
       const now = Date.now()
       const sendTime = new Date(data.timestamp).getTime()
       const latency = now - sendTime
-      console.log(`心跳延迟: ${latency}ms`)
+      logger.debug(`心跳延迟: ${latency}ms`)
     } else {
-      console.log('心跳响应: 收到服务端确认')
+      logger.debug('心跳响应: 收到服务端确认')
     }
   }
 
@@ -493,7 +566,7 @@ export default class SocketHandler {
 
   // 版本管理命令处理方法
   async handleGetCurrentVersionCommand(parameters, messageId = null) {
-    console.log('📋 开始处理 getCurrentVersion 命令:', parameters)
+    logger.debug('📋 开始处理 getCurrentVersion 命令:', parameters)
 
     const commandId = messageId || parameters?.commandId || null
 
@@ -533,9 +606,9 @@ export default class SocketHandler {
     try {
       if (this.socket && this.socket.connected) {
         this.socket.emit(eventName, data)
-        console.log(`📡 已发送通知到服务器: ${eventName}`)
+        logger.debug(`📡 已发送通知到服务器: ${eventName}`)
       } else {
-        console.warn('无法发送通知：Socket 未连接')
+        logger.warn('无法发送通知：Socket 未连接')
       }
     } catch (error) {
       ErrorLogger.logError('发送通知失败', error, { eventName })
@@ -559,7 +632,7 @@ export default class SocketHandler {
       }
 
       this.socket.emit('batch:device_status', statusData)
-      console.log(`📊 批量任务状态报告: ${batchTaskId} - ${status}`)
+      logger.debug(`📊 批量任务状态报告: ${batchTaskId} - ${status}`)
     } catch (error) {
       ErrorLogger.logError('报告批量任务状态失败', error, { batchTaskId, status })
     }
@@ -583,7 +656,7 @@ export default class SocketHandler {
       }
 
       this.socket.emit('batch:device_progress', progressData)
-      console.log(`🔄 批量任务进度报告: ${batchTaskId} - ${progress}% (${currentStep}/${totalSteps})`)
+      logger.debug(`🔄 批量任务进度报告: ${batchTaskId} - ${progress}% (${currentStep}/${totalSteps})`)
     } catch (error) {
       ErrorLogger.logError('报告批量任务进度失败', error, { batchTaskId, progress })
     }

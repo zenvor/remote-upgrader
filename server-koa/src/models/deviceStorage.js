@@ -120,7 +120,6 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
       // 更新网络信息（统一使用扁平结构）
       device.network = {
         wifiName: device.network?.wifiName ?? null,
-        wifiSignal: device.network?.wifiSignal ?? null,
         localIp: device.network?.localIp ?? null,
         macAddresses: Array.isArray(device.network?.macAddresses)
           ? device.network.macAddresses
@@ -142,7 +141,6 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
         },
         network: {
           wifiName: network?.wifiName ?? deviceInfo?.network?.wifiName ?? null,
-          wifiSignal: network?.wifiSignal ?? deviceInfo?.network?.wifiSignal ?? null,
           localIp: network?.localIp ?? deviceInfo?.network?.localIp ?? null,
           macAddresses: Array.isArray(network?.macAddresses)
             ? network.macAddresses
@@ -187,7 +185,7 @@ export async function saveDeviceInfo(deviceId, deviceInfo, network = {}) {
 export async function updateDeviceConnectionStatus(deviceId, isOnline = true) {
   try {
     const config = await getDevicesConfig()
-    const now = DateHelper.getCurrentDate()
+    const now = DateHelper.getCurrentDateTime()
 
     if (!config.devices[deviceId]) {
       console.warn(`尝试更新连接状态但设备不存在: ${deviceId}`)
@@ -224,7 +222,7 @@ export async function updateDeviceConnectionStatus(deviceId, isOnline = true) {
 export async function recordDeviceDisconnection(deviceId) {
   try {
     const config = await getDevicesConfig()
-    const now = DateHelper.getCurrentDate()
+    const now = DateHelper.getCurrentDateTime()
 
     if (!config.devices[deviceId]) {
       return config // 设备不存在，直接返回
@@ -255,7 +253,7 @@ export async function recordDeviceDisconnection(deviceId) {
 export async function updateDeviceHeartbeat(deviceId, network = {}) {
   try {
     const config = await getDevicesConfig()
-    const now = DateHelper.getCurrentDate()
+    const now = DateHelper.getCurrentDateTime()
 
     if (!config.devices[deviceId]) {
       return config // 设备不存在，直接返回
@@ -274,16 +272,11 @@ export async function updateDeviceHeartbeat(deviceId, network = {}) {
     // 更新网络信息（如果提供）
     device.network = device.network || {
       wifiName: null,
-      wifiSignal: null,
       localIp: null,
       macAddresses: []
     }
     if (network.wifiName !== undefined) {
       device.network.wifiName = network.wifiName
-    }
-
-    if (network.wifiSignal !== undefined) {
-      device.network.wifiSignal = network.wifiSignal
     }
 
 

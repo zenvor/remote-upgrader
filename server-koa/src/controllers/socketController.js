@@ -67,16 +67,14 @@ export function setupSocketHandlers(io) {
       const { deviceId } = data
       if (deviceId && typeof deviceId === 'string') {
         // 可选网络刷新（接受顶层上报）
-        const { wifiName, wifiSignal, localIp, macAddresses } = data || {}
+        const { wifiName, localIp, macAddresses } = data || {}
         if (
           wifiName !== undefined ||
-          wifiSignal !== undefined ||
           localIp !== undefined ||
           Array.isArray(macAddresses)
         ) {
           deviceManager.updateNetworkInfo(deviceId, {
             wifiName,
-            wifiSignal,
             localIp,
             macAddresses
           })
@@ -169,7 +167,6 @@ export function setupSocketHandlers(io) {
           // 更新设备WiFi信息到分组字段
           device.info.network = device.info.network || {}
           device.info.network.wifiName = data.wifiName
-          device.info.network.wifiSignal = data.wifiSignal
           console.log(`WiFi信息更新: ${data.deviceId} (WiFi: ${data.wifiName})`)
         }
       } catch (error) {
@@ -427,6 +424,16 @@ export function setupSocketHandlers(io) {
           timestamp: new Date().toISOString()
         }
 
+        // 更新设备管理器中的进度状态
+        deviceManager.updateDeviceOperationProgress(deviceId, {
+          sessionId,
+          step,
+          progress: validatedProgress,
+          message,
+          error,
+          metadata
+        })
+
         // 向所有管理客户端广播操作进度
         socket.broadcast.emit('device:operation_progress', progressUpdate)
 
@@ -466,6 +473,16 @@ export function setupSocketHandlers(io) {
           status: 'started'
         }
 
+        // 初始化设备操作进度状态
+        deviceManager.updateDeviceOperationProgress(deviceId, {
+          sessionId,
+          operationType,
+          step: 'preparing',
+          progress: 0,
+          message: `开始${operationType === 'upgrade' ? '升级' : '回滚'}`,
+          metadata: { project, version }
+        })
+
         // 广播操作开始事件
         socket.broadcast.emit('device:operation_start', sessionInfo)
 
@@ -498,6 +515,9 @@ export function setupSocketHandlers(io) {
           result: result || {},
           endTime: new Date().toISOString()
         }
+
+        // 清除设备操作状态
+        deviceManager.clearDeviceOperationProgress(deviceId)
 
         // 广播操作完成事件
         socket.broadcast.emit('device:operation_complete', completionInfo)

@@ -76,7 +76,7 @@ export default class BatchTaskManager {
   }
 
   /**
-   * 创建批量升级任务
+   * 创建升级任务（支持单设备和批量）
    */
   async createUpgradeTask(options) {
     const {
@@ -85,7 +85,9 @@ export default class BatchTaskManager {
       project,
       deployPath = null,
       preservedPaths = [],
-      creator = 'system'
+      sessionId = null,
+      creator = 'system',
+      scope = deviceIds.length === 1 ? 'single' : 'batch' // 自动判断作用域
     } = options
 
     // 参数验证
@@ -102,6 +104,8 @@ export default class BatchTaskManager {
     const task = {
       id: taskId,
       type: TASK_TYPE.UPGRADE,
+      scope, // 'single' 或 'batch'
+      deviceCount: deviceIds.length, // 设备数量，便于前端显示
       status: TASK_STATUS.PENDING,
       creator,
       createdAt: new Date().toISOString(),
@@ -118,6 +122,7 @@ export default class BatchTaskManager {
         },
         deployPath: safeDeployPath,
         preservedPaths: safePreservedPaths,
+        sessionId, // 会话ID用于进度追踪
         totalDevices: deviceIds.length,
         batchSize: this.config.batchSize,
         timeout: this.config.deviceTimeout
@@ -148,7 +153,7 @@ export default class BatchTaskManager {
         {
           timestamp: new Date().toISOString(),
           level: 'info',
-          message: `创建批量升级任务，目标设备: ${deviceIds.length} 个，包: ${packageInfo.fileName}`,
+          message: `创建${scope === 'single' ? '单设备' : '批量'}升级任务，目标设备: ${deviceIds.length} 个，包: ${packageInfo.fileName}`,
           details: {
             deviceIds,
             packageInfo,
@@ -163,24 +168,66 @@ export default class BatchTaskManager {
     this.tasks.set(taskId, task)
     await this.saveTasks()
 
-    console.log(`📋 创建批量升级任务: ${taskId}，设备数量: ${deviceIds.length}`)
+    console.log(`📋 创建${scope === 'single' ? '单设备' : '批量'}升级任务: ${taskId}，设备数量: ${deviceIds.length}`)
 
     return taskId
   }
 
   /**
-   * 创建批量回滚任务
+   * 创建回滚任务（支持单设备和批量）
    */
   async createRollbackTask(options) {
-    const { deviceIds, project, creator = 'system' } = options
+    const {
+      deviceIds,
+      project,
+      preservedPaths = [], // 添加白名单配置参数
+      devicePreservedPaths = {},
+      sessionId = null,
+      creator = 'system',
+      scope = deviceIds.length === 1 ? 'single' : 'batch' // 自动判断作用域
+    } = options
 
     // 参数验证
     this.validateRollbackOptions(options)
+
+    const sanitizedDefaultPreservedPaths = Array.isArray(preservedPaths)
+      ? preservedPaths
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+      : []
+
+    const sanitizedDevicePreservedPaths = {}
+    const devicesMissingWhitelist = []
+
+    deviceIds.forEach((deviceId) => {
+      const rawPaths = devicePreservedPaths && Array.isArray(devicePreservedPaths[deviceId])
+        ? devicePreservedPaths[deviceId]
+        : sanitizedDefaultPreservedPaths
+
+      const cleanedPaths = Array.isArray(rawPaths)
+        ? rawPaths
+            .map((item) => (typeof item === 'string' ? item.trim() : ''))
+            .filter((item) => item.length > 0)
+        : []
+
+      if (!cleanedPaths || cleanedPaths.length === 0) {
+        console.warn(`⚠️ 回滚任务警告：设备 ${deviceId} 缺少白名单配置，执行时将被阻止`)
+        devicesMissingWhitelist.push(deviceId)
+      }
+
+      sanitizedDevicePreservedPaths[deviceId] = cleanedPaths
+    })
+
+    if (devicesMissingWhitelist.length > 0) {
+      throw new Error(`以下设备缺少白名单配置：${devicesMissingWhitelist.join(', ')}`)
+    }
 
     const taskId = this.generateTaskId()
     const task = {
       id: taskId,
       type: TASK_TYPE.ROLLBACK,
+      scope, // 'single' 或 'batch'
+      deviceCount: deviceIds.length, // 设备数量，便于前端显示
       status: TASK_STATUS.PENDING,
       creator,
       createdAt: new Date().toISOString(),
@@ -189,6 +236,9 @@ export default class BatchTaskManager {
       // 任务配置
       config: {
         project, // frontend 或 backend
+        preservedPaths: sanitizedDefaultPreservedPaths, // 默认白名单保护路径
+        devicePreservedPaths: sanitizedDevicePreservedPaths,
+        sessionId, // 会话ID用于进度追踪
         totalDevices: deviceIds.length,
         batchSize: this.config.batchSize,
         timeout: this.config.deviceTimeout
@@ -201,7 +251,8 @@ export default class BatchTaskManager {
         startTime: null,
         endTime: null,
         error: null,
-        retryCount: 0
+        retryCount: 0,
+        preservedPaths: sanitizedDevicePreservedPaths[deviceId] || []
       })),
 
       // 统计信息
@@ -219,7 +270,7 @@ export default class BatchTaskManager {
         {
           timestamp: new Date().toISOString(),
           level: 'info',
-          message: `创建批量回滚任务，目标设备: ${deviceIds.length} 个，目标版本: 上一版本`,
+          message: `创建${scope === 'single' ? '单设备' : '批量'}回滚任务，目标设备: ${deviceIds.length} 个，目标版本: 上一版本`,
           details: { deviceIds }
         }
       ]
@@ -229,7 +280,7 @@ export default class BatchTaskManager {
     this.tasks.set(taskId, task)
     await this.saveTasks()
 
-    console.log(`📋 创建批量回滚任务: ${taskId}，设备数量: ${deviceIds.length}`)
+    console.log(`📋 创建${scope === 'single' ? '单设备' : '批量'}回滚任务: ${taskId}，设备数量: ${deviceIds.length}`)
 
     return taskId
   }
@@ -355,13 +406,24 @@ export default class BatchTaskManager {
     if (task.type === TASK_TYPE.UPGRADE) {
       const deployPath = task.config.deployPath
       const preserved = Array.isArray(task.config.preservedPaths) ? task.config.preservedPaths : []
+
+      // 📋 详细日志：升级白名单配置
+      console.log(`📋 升级任务 ${task.id} - 设备 ${device.deviceId} 配置:`)
+      console.log(`  - 项目: ${task.config.project}`)
+      console.log(`  - 升级包: ${task.config.packageInfo.fileName}`)
+      console.log(`  - 版本: ${task.config.packageInfo.version}`)
+      console.log(`  - 会话ID: ${task.config.sessionId || 'N/A'}`)
+      console.log(`  - 白名单路径: ${JSON.stringify(preserved)}`)
+      console.log(`  - 部署路径: ${deployPath || '默认'}`)
+
       commandData = {
         project: task.config.project,
         fileName: task.config.packageInfo.fileName,
         version: task.config.packageInfo.version,
         fileMD5: task.config.packageInfo.fileMD5,
         packagePath: task.config.packageInfo.packagePath,
-        batchTaskId: task.id // 添加批量任务标识
+        batchTaskId: task.id, // 添加批量任务标识
+        sessionId: task.config.sessionId // 添加会话ID以支持进度追踪
       }
 
       if (deployPath) {
@@ -369,14 +431,42 @@ export default class BatchTaskManager {
       }
       if (preserved.length > 0) {
         commandData.preservedPaths = preserved
+        console.log(`✅ 升级命令已添加白名单: ${preserved.join(', ')}`)
+      } else {
+        console.warn(`⚠️ 升级命令无白名单保护`)
       }
     } else {
+      // 回滚命令
+      const deviceSpecificPreserved = Array.isArray(device.preservedPaths) ? device.preservedPaths : []
+      const preserved = deviceSpecificPreserved.length > 0
+        ? deviceSpecificPreserved
+        : Array.isArray(task.config.preservedPaths)
+          ? task.config.preservedPaths
+          : []
+
+      // 📋 详细日志：回滚白名单配置
+      console.log(`📋 回滚任务 ${task.id} - 设备 ${device.deviceId} 白名单配置:`)
+      console.log(`  - 设备专用白名单: ${JSON.stringify(deviceSpecificPreserved)}`)
+      console.log(`  - 任务默认白名单: ${JSON.stringify(task.config.preservedPaths || [])}`)
+      console.log(`  - 最终使用白名单: ${JSON.stringify(preserved)}`)
+      console.log(`  - 白名单来源: ${deviceSpecificPreserved.length > 0 ? '设备专用配置' : '任务默认配置'}`)
+
       commandData = {
         project: task.config.project,
-        batchTaskId: task.id // 添加批量任务标识
+        batchTaskId: task.id, // 添加批量任务标识
+        sessionId: task.config.sessionId // 添加会话ID以支持进度追踪
+      }
+
+      // 添加白名单保护路径
+      if (preserved.length > 0) {
+        commandData.preservedPaths = preserved
+        console.log(`✅ 回滚命令已添加白名单: ${preserved.join(', ')}`)
+      } else {
+        console.warn(`⚠️ 回滚命令无白名单保护 - 设备 ${device.deviceId} 可能会删除所有文件！`)
       }
     }
 
+    console.log(`🚀 发送${task.type === TASK_TYPE.UPGRADE ? '升级' : '回滚'}命令到设备 ${device.deviceId}:`, JSON.stringify(commandData, null, 2))
     return this.messageRouter.sendToDevice(device.deviceId, command, commandData)
   }
 
@@ -685,6 +775,8 @@ export default class BatchTaskManager {
     const response = {
       id: task.id,
       type: task.type,
+      scope: task.scope, // 添加作用域字段（single/batch）
+      deviceCount: task.deviceCount, // 添加设备数量字段
       status: task.status,
       creator: task.creator,
       createdAt: task.createdAt,

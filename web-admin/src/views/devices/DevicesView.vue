@@ -23,10 +23,6 @@
             <RefreshIcon />
             <span style="margin-left: 4px">批量回滚</span>
           </a-button>
-          <a-button @click="showBatchTaskModal">
-            <EyeOutlined />
-            <span style="margin-left: 4px">快速监控</span>
-          </a-button>
           <a-button @click="goToTaskManagement">
             <DashboardOutlined />
             <span style="margin-left: 4px">任务管理中心</span>
@@ -86,14 +82,7 @@
 
           <!-- 网络信息列 -->
           <template v-else-if="column.key === 'network'">
-            <span class="text-sm text-gray-600">
-              {{
-                (record.wifiName || '-') +
-                ' (' +
-                (typeof record.wifiSignal === 'number' ? record.wifiSignal + ' dBm' : '-') +
-                ')'
-              }}
-            </span>
+            <span class="text-sm text-gray-600">{{ record.wifiName || '-' }}</span>
           </template>
 
           <!-- IP 信息列 -->
@@ -107,7 +96,7 @@
 
           <!-- 最后心跳列 -->
           <template v-else-if="column.key === 'lastHeartbeat'">
-            <span class="text-sm text-gray-600">{{ formatDateTime(record.lastHeartbeat) }}</span>
+            <span class="text-sm text-gray-600">{{ formatLastActiveTime(record) }}</span>
           </template>
 
           <!-- 进度展示列 -->
@@ -156,9 +145,6 @@
       </a-table>
     </a-card>
 
-    <!-- 批量任务监控对话框 -->
-    <BatchTaskModal v-model:open="batchTaskVisible" />
-
     <!-- 升级对话框 -->
     <DeviceUpgradeDialog
       v-model:open="upgradeDialogVisible"
@@ -192,7 +178,6 @@ import {
 } from '@ant-design/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import BatchTaskModal from './components/BatchTaskModal.vue'
 import DeviceDetailModal from './components/DeviceDetailModal.vue'
 import DeviceQueryForm from './components/DeviceQueryForm.vue'
 import DeviceRollbackDialog from './components/DeviceRollbackDialog.vue'
@@ -240,9 +225,6 @@ const upgradeTargetDevices = ref([])
 // 回滚对话框状态
 const rollbackDialogVisible = ref(false)
 const rollbackTargetDevices = ref([])
-
-// 批量任务监控状态
-const batchTaskVisible = ref(false)
 
 // 设备统计
 const deviceStats = computed(() => {
@@ -302,9 +284,12 @@ const checkOfflineDevices = () => {
   devices.value.forEach((device, index) => {
     if (device.status === 'online' && device.lastSeen) {
       if (now - device.lastSeen > offlineThreshold) {
+        const disconnectedAt = new Date().toISOString()
         devices.value[index] = {
           ...device,
-          status: 'offline'
+          status: 'offline',
+          disconnectedAt, // 记录离线时间
+          lastHeartbeat: device.lastHeartbeat || disconnectedAt // 保留最后心跳时间，如果没有则使用离线时间
         }
         console.log(`设备 ${device.deviceName} 被标记为离线`)
         toast.warn(`设备 "${device.deviceName}" 已离线`, '设备状态')
@@ -379,6 +364,14 @@ const initializeDeviceProgress = (devicesList = [], operationType = 'upgrade') =
 
   devicesList.forEach((device) => {
     if (!device?.deviceId) return
+
+    // 检查设备是否已有进度状态，避免覆盖现有进度
+    const existingProgress = deviceProgressMap.get(device.deviceId)
+    if (existingProgress && existingProgress.percent > 0) {
+      console.log(`设备 ${device.deviceId} 已有进度状态，跳过初始化`)
+      return
+    }
+
     const displayMessage = messageMap[operationType] || '准备执行操作'
 
     updateDeviceProgress(device.deviceId, {
@@ -399,12 +392,6 @@ const handleDialogSuccess = (payload = null) => {
   }
 
   fetchData()
-
-  if (payload?.type === 'batch' && payload?.taskId) {
-    setTimeout(() => {
-      batchTaskVisible.value = true
-    }, 800)
-  }
 }
 
 // 显示设备详情对话框
@@ -436,11 +423,6 @@ const showBatchRollbackDialog = () => {
   rollbackDialogVisible.value = true
 }
 
-// 显示批量任务监控
-const showBatchTaskModal = () => {
-  batchTaskVisible.value = true
-}
-
 // 跳转到任务管理中心
 const goToTaskManagement = () => {
   router.push('/batch-tasks')
@@ -448,6 +430,17 @@ const goToTaskManagement = () => {
 
 // 获取设备进度信息
 const getDeviceProgress = (deviceId) => {
+  // 首先从设备列表数据中获取后端持久化的进度信息
+  const device = devices.value.find(d => d.deviceId === deviceId)
+  if (device?.currentOperation && device.currentOperation.type) {
+    return {
+      percent: device.currentOperation.progress || 0,
+      status: device.currentOperation.error ? 'exception' : 'active',
+      message: device.currentOperation.message || device.currentOperation.step || ''
+    }
+  }
+
+  // 然后从内存中的实时进度映射获取（兼容Socket事件）
   const progress = deviceProgressMap.get(deviceId)
   if (!progress) return null
 
@@ -509,6 +502,28 @@ const formatDateTime = (timestamp) => {
     minute: '2-digit',
     second: '2-digit'
   })
+}
+
+// 格式化设备最后活跃时间（优先显示心跳时间，离线时显示断开时间）
+const formatLastActiveTime = (device) => {
+  if (!device) return '未知'
+
+  // 优先使用最后心跳时间
+  if (device.lastHeartbeat) {
+    return formatDateTime(device.lastHeartbeat)
+  }
+
+  // 如果设备离线且有断开连接时间，使用断开时间
+  if (device.status === 'offline' && device.disconnectedAt) {
+    return formatDateTime(device.disconnectedAt)
+  }
+
+  // 兼容旧版本：检查 lastSeen 字段
+  if (device.lastSeen) {
+    return formatDateTime(device.lastSeen)
+  }
+
+  return '未知'
 }
 
 // 生命周期

@@ -367,24 +367,40 @@ router.post('/versions/:deviceId/rollback', async (ctx) => {
       return
     }
 
-    // 发送简单回滚命令到设备（回滚到上一版本）
-    const result = await deviceManager.sendCommand(deviceId, 'cmd:rollback', {
-      project
+    // 使用批量管理器进行回滚（确保白名单保护）
+    const { getDevicePreservedPaths, initializeBatchTaskManager } = await import('../controllers/deviceController.js')
+
+    // 获取白名单配置
+    let preservedPaths = []
+    try {
+      preservedPaths = await getDevicePreservedPaths(deviceId, project)
+    } catch (error) {
+      console.warn(`获取设备 ${deviceId} 白名单配置失败:`, error.message)
+    }
+
+    // 通过批量管理器创建并执行回滚任务
+    const batchTaskManager = await initializeBatchTaskManager()
+    const taskId = await batchTaskManager.createRollbackTask({
+      deviceIds: [deviceId],
+      project,
+      preservedPaths,
+      sessionId: `quick_rollback_${Date.now()}`,
+      creator: 'versions_api',
+      scope: 'single'
     })
 
-    const response = result.data
+    // 异步执行任务
+    batchTaskManager.executeTask(taskId).catch(error => {
+      console.error(`快速回滚任务执行失败: ${taskId}`, error.message)
+    })
 
-    if (result.success && response?.success) {
-      ctx.body = {
-        success: true,
-        message: response.message || '回滚到上一版本成功',
-        data: response.data || null
-      }
-    } else {
-      ctx.status = 500
-      ctx.body = {
-        success: false,
-        message: response?.message || result.error || '回滚失败'
+    ctx.body = {
+      success: true,
+      message: '回滚命令已发送',
+      data: {
+        taskId,
+        project,
+        preservedPathsCount: preservedPaths.length
       }
     }
   } catch (error) {

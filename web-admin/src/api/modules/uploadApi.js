@@ -17,7 +17,7 @@ export const directUpload = (file, project, version, onProgress, abortController
 
   const config = {
     headers: {
-      'Content-Type': 'multipart/form-data'
+      'Content-Type': 'multipart/form-data; charset=utf-8'
     },
     timeout: 300_000, // 5分钟超时，适应大文件
     onUploadProgress(progressEvent) {
