@@ -3,7 +3,7 @@
  * 用于实时通信和进度更新
  */
 import { io } from 'socket.io-client'
-import { ref, reactive } from 'vue'
+import { reactive, ref } from 'vue'
 
 // 连接状态
 export const isConnected = ref(false)
@@ -34,7 +34,7 @@ class SocketService {
     }
 
     // 从环境变量或配置中获取服务器地址
-    let serverUrl = import.meta.env.VITE_SERVER_URL
+    let serverUrl = import.meta.env.VITE_APP_API_URL
 
     // 如果没有配置环境变量，则根据当前环境自动推断
     if (!serverUrl) {
@@ -169,7 +169,7 @@ class SocketService {
 
     // 通知监听器
     const listeners = progressState.listeners.get(sessionId) || []
-    listeners.forEach(callback => {
+    listeners.forEach((callback) => {
       try {
         callback(progressInfo)
       } catch (err) {

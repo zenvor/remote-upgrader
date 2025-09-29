@@ -1,8 +1,8 @@
+import 'ant-design-vue/dist/reset.css'
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
-import 'ant-design-vue/dist/reset.css'
-import './style.less'
 import App from './App.vue'
+import './style.less'
 
 const routes = [
   { path: '/', redirect: '/packages' },
@@ -12,7 +12,7 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.VITE_APP_BASE_PATH || '/'),
   routes
 })
 

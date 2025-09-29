@@ -26,7 +26,7 @@
             </div>
             <div class="info-item">
               <span class="info-label">状态</span>
-              <a-tag :color="statusColor(device.status)" class="status-tag">
+              <a-tag style="margin: 0" :color="statusColor(device.status)" class="status-tag">
                 {{ getStatusLabel(device.status) }}
               </a-tag>
             </div>
@@ -93,13 +93,13 @@
             </div>
             <div class="info-item">
               <span class="info-label">部署能力</span>
-              <a-tag :color="device.hasDeployPath ? 'green' : 'default'">
+              <a-tag style="margin: 0" :color="device.hasDeployPath ? 'green' : 'default'">
                 {{ device.hasDeployPath ? '已配置' : '未配置' }}
               </a-tag>
             </div>
             <div class="info-item">
               <span class="info-label">回滚能力</span>
-              <a-tag :color="device.rollbackAvailable ? 'green' : 'default'">
+              <a-tag style="margin: 0" :color="device.rollbackAvailable ? 'green' : 'default'">
                 {{ device.rollbackAvailable ? '可回滚' : '不可回滚' }}
               </a-tag>
             </div>
@@ -268,8 +268,6 @@ const formatDuration = (totalSeconds) => {
   }
   return `${minutes}分钟`
 }
-
-
 </script>
 
 <style scoped>

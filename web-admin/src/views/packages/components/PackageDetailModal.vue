@@ -1,11 +1,6 @@
 <template>
   <!-- 包详情对话框（Ant Design Modal） -->
-  <a-modal
-    v-model:open="open"
-    :title="`包详情 - ${selectedPackage?.fileName}`"
-    :width="960"
-    :mask-closable="false"
-  >
+  <a-modal v-model:open="open" :title="`包详情 - ${selectedPackage?.fileName}`" :width="960" :mask-closable="false">
     <a-space v-if="selectedPackage" direction="vertical" size="large" style="width: 100%">
       <!-- 基本信息和完整性信息 -->
       <a-row :gutter="16">
