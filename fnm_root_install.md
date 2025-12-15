@@ -25,11 +25,13 @@
 ## 3. 在 root 用户下安装 fnm（压缩包在 /home/hcx 示例）
 
 切换到 root 用户（如果还没在 root 下）：
+
 ```bash
 sudo -i   # 或 su -
 ```
 
 然后执行：
+
 ```bash
 # 切换到压缩包所在目录
 cd /home/hcx
@@ -97,6 +99,67 @@ node -v
 npm -v
 ```
 
+# 设置 npm 使用淘宝（npmmirror）源
+
+npm config set registry https://registry.npmmirror.com/
+要修改 **npm 的国内镜像**，直接执行即可：
+
+---
+
+## 设置 npm 使用淘宝（npmmirror）源
+
+```bash
+npm config set registry https://registry.npmmirror.com/
+```
+
+验证：
+
+```bash
+npm config get registry
+```
+
+输出应为：
+
+```
+https://registry.npmmirror.com/
+```
+
+---
+
+## 如果你还需要加速二进制包（node-gyp、electron 等）
+
+```bash
+npm config set disturl https://npmmirror.com/mirrors/node/
+npm config set electron_mirror https://npmmirror.com/mirrors/electron/
+npm config set puppeteer_download_host https://npmmirror.com/mirrors/
+```
+
+---
+
+## 清华源（可替代）
+
+如果你更偏好清华：
+
+```bash
+npm config set registry https://mirrors.tuna.tsinghua.edu.cn/npm/
+```
+
+---
+
+## 恢复 npm 官方源（如果以后需要）
+
+```bash
+npm config set registry https://registry.npmjs.org/
+```
+
+---
+
+## 🧹 推荐顺手做一次缓存清理（避免旧缓存影响）
+
+```bash
+npm cache clean --force
+```
+
 ---
 
 ## 7. 常见问题与解决
@@ -112,14 +175,13 @@ npm -v
 
 ## 8. 总结流程图（root 用户环境）
 
-1. **有网电脑下载** → `fnm-linux.zip`  
-2. **传到目标机（任意目录，例如 /home/hcx/）**  
-3. **root 用户解压并移动 fnm 到 /root/.local/bin**  
-4. **写入国内镜像** → `/root/.bashrc`  
-5. **写入 eval "$(fnm env)"** → `/root/.bashrc`  
-6. **fnm install <版本号>** → 安装并切换 Node  
+1. **有网电脑下载** → `fnm-linux.zip`
+2. **传到目标机（任意目录，例如 /home/hcx/）**
+3. **root 用户解压并移动 fnm 到 /root/.local/bin**
+4. **写入国内镜像** → `/root/.bashrc`
+5. **写入 eval "$(fnm env)"** → `/root/.bashrc`
+6. **fnm install <版本号>** → 安装并切换 Node
 
 ---
 
 ✅ 按照本指南，你就能在国产 Linux 上以 **root 用户** 顺利离线安装 fnm，并通过国内镜像装任意版本的 Node.js（18/20/22）。
-
